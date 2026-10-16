@@ -53,7 +53,7 @@ class Monitor:
         source: InventorySource,
         state: StateStore,
         notifier: Notifier,
-        interval_seconds: int = 60,
+        interval_seconds: int = 30,
         error_alert_minutes: int = 10,
         mac_notification: bool = True,
         test_mode: bool = False,

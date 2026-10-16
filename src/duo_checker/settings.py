@@ -143,7 +143,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         ),
         mail_to=_split(env.get("MAIL_TO", "")) or [user],
         stores=stores,
-        interval_seconds=max(30, int(env.get("DUO_INTERVAL_SECONDS") or 60)),
+        interval_seconds=max(30, int(env.get("DUO_INTERVAL_SECONDS") or 30)),
         page_reload_minutes=int(env.get("DUO_PAGE_RELOAD_MINUTES") or 30),
         error_alert_minutes=int(env.get("DUO_ERROR_ALERT_MINUTES") or 10),
         mac_notification=(env.get("DUO_MAC_NOTIFICATION", "1") not in ("0", "false", "no")),
@@ -192,7 +192,7 @@ def run_setup_wizard(path: Path = ENV_PATH) -> None:
         "",
         "# 任意設定（既定値で問題なければ不要）",
         "# DUO_STORES=R005,R718        # 監視する店舗番号。未指定なら全国の全店舗",
-        "# DUO_INTERVAL_SECONDS=60     # 確認間隔（秒）",
+        "# DUO_INTERVAL_SECONDS=30     # 確認間隔（秒、30 以上）",
         "# DUO_MAC_NOTIFICATION=1      # メールに加えて Mac の通知センターにも表示する",
         "",
     ]
