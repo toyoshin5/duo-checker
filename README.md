@@ -30,7 +30,7 @@ cd duo-checker
 uv run duo-checker
 ```
 
-1. 初回はメール設定を聞かれ（`.env` に権限 600 で保存）、テストメールが届く
+1. 初回はメール設定を聞かれ、テストメールが届く。Gmail の場合は https://myaccount.google.com/apppasswords でメール送信用のパスワードを作って貼り付ける（普段のパスワードではない。`.env` に権限 600 で保存）
 2. カラーと容量を番号で選ぶ（`--color starwhite --capacity 256gb` のように引数でも指定できる）
 3. Safari に監視用のウィンドウが開いて Dock に最小化され、監視が始まる（Ctrl+C で終了）
 

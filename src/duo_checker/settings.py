@@ -17,14 +17,50 @@ ENV_PATH = ROOT / ".env"
 DATA_DIR = ROOT / "var"
 LOG_DIR = ROOT / "logs"
 
-# メールアドレスのドメインから SMTP サーバーを推定する（アプリ用パスワードが必要なサービス）
+@dataclass(frozen=True)
+class Provider:
+    name: str
+    host: str
+    port: int
+    security: str
+    url: str
+    steps: tuple[str, ...]
+
+
+_GMAIL = Provider(
+    "Gmail", "smtp.gmail.com", 587, "starttls", "https://myaccount.google.com/apppasswords",
+    (
+        "1. 上のリンクを開き、Google アカウントにログインする",
+        "2. アプリ名に「duo-checker」と入力して「作成」を押す",
+        "3. 表示された 16 文字のパスワードをコピーする",
+        "※ 2 段階認証プロセスを有効にしていないと作成できません",
+    ),
+)
+_ICLOUD = Provider(
+    "iCloud メール", "smtp.mail.me.com", 587, "starttls", "https://account.apple.com/",
+    (
+        "1. 上のリンクを開いてサインインし、「サインインとセキュリティ」→「アプリ用パスワード」を開く",
+        "2. 名前に「duo-checker」と入力して作成する",
+        "3. 表示されたパスワードをコピーする",
+    ),
+)
+_YAHOO = Provider(
+    "Yahoo!メール", "smtp.mail.yahoo.co.jp", 465, "ssl", "https://mail.yahoo.co.jp/",
+    (
+        "1. 上のリンクを開き、Yahoo!メールの 設定 →「IMAP/POP/SMTPアクセスとメール転送」を開く",
+        "2. Yahoo! JAPAN 公式サービス以外からの SMTP アクセスを有効にする",
+        "3. 画面の案内に従って、メールソフト用のパスワードを確認する",
+    ),
+)
+
+# メールアドレスのドメインから SMTP サーバーと、メール送信用パスワードの作り方を決める
 KNOWN_PROVIDERS = {
-    "gmail.com": ("smtp.gmail.com", 587, "starttls", "https://myaccount.google.com/apppasswords"),
-    "googlemail.com": ("smtp.gmail.com", 587, "starttls", "https://myaccount.google.com/apppasswords"),
-    "icloud.com": ("smtp.mail.me.com", 587, "starttls", "https://account.apple.com/（サインインとセキュリティ → アプリ用パスワード）"),
-    "me.com": ("smtp.mail.me.com", 587, "starttls", "https://account.apple.com/（サインインとセキュリティ → アプリ用パスワード）"),
-    "mac.com": ("smtp.mail.me.com", 587, "starttls", "https://account.apple.com/（サインインとセキュリティ → アプリ用パスワード）"),
-    "yahoo.co.jp": ("smtp.mail.yahoo.co.jp", 465, "ssl", "Yahoo!メールの設定 → IMAP/POP/SMTPアクセス"),
+    "gmail.com": _GMAIL,
+    "googlemail.com": _GMAIL,
+    "icloud.com": _ICLOUD,
+    "me.com": _ICLOUD,
+    "mac.com": _ICLOUD,
+    "yahoo.co.jp": _YAHOO,
 }
 
 
@@ -83,13 +119,13 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         raise SettingsError("メール送信の設定がありません。`uv run duo-checker setup` を実行してください")
 
     provider = KNOWN_PROVIDERS.get(user.rsplit("@", 1)[-1].lower())
-    host = env.get("SMTP_HOST") or (provider[0] if provider else "")
+    host = env.get("SMTP_HOST") or (provider.host if provider else "")
     if not host:
         raise SettingsError("SMTP_HOST が未設定です。`uv run duo-checker setup` を実行してください")
-    security = (env.get("SMTP_SECURITY") or (provider[2] if provider else "starttls")).lower()
+    security = (env.get("SMTP_SECURITY") or (provider.security if provider else "starttls")).lower()
     if security not in ("starttls", "ssl", "none"):
         raise SettingsError("SMTP_SECURITY は starttls / ssl / none のいずれかです")
-    port = int(env.get("SMTP_PORT") or (provider[1] if provider else {"starttls": 587, "ssl": 465, "none": 25}[security]))
+    port = int(env.get("SMTP_PORT") or (provider.port if provider else {"starttls": 587, "ssl": 465, "none": 25}[security]))
 
     stores = [s.upper() for s in _split(env.get("DUO_STORES", ""))] or list(STORES)
     unknown = [s for s in stores if s not in STORES]
@@ -117,8 +153,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
 def run_setup_wizard(path: Path = ENV_PATH) -> None:
     """対話形式で SMTP 設定を聞き、.env を権限 600 で書き出す。"""
     print("=== duo-checker 初回セットアップ（メール送信の設定）===")
-    print("在庫が復活したときの通知メールを送るアカウントを設定します。")
-    print("Gmail / iCloud / Yahoo!メールなら、アドレスとアプリ用パスワードだけで設定できます。\n")
+    print("在庫が復活したときに、あなたのメールアカウントから通知メールを送ります。")
+    print("そのための送信元アドレスと、メール送信用のパスワードを設定します。\n")
 
     user = ""
     while "@" not in user:
@@ -129,17 +165,25 @@ def run_setup_wizard(path: Path = ENV_PATH) -> None:
         f"SMTP_USER={user}",
     ]
     if provider:
-        print(f"  → SMTP サーバー: {provider[0]}:{provider[1]}")
-        print(f"  アプリ用パスワードの発行: {provider[3]}")
+        rule = "-" * 64
+        print(f"\n{rule}")
+        print(f"次のリンク先で、メール送信用のパスワードを作成してください（{provider.name}）")
+        print(f"\n    {provider.url}\n")
+        for step in provider.steps:
+            print(f"  {step}")
+        print("  ※ 普段のログイン用パスワードではありません。duo-checker がメールを送るためだけに使います")
+        print(f"{rule}\n")
+        prompt = "作成したメール送信用パスワードを貼り付けて Enter（入力内容は表示されません）: "
     else:
         host = input("SMTP サーバー（例: smtp.example.com）: ").strip()
         port = input("SMTP ポート [587]: ").strip() or "587"
         security = input("暗号化方式 starttls / ssl / none [starttls]: ").strip() or "starttls"
         lines += [f"SMTP_HOST={host}", f"SMTP_PORT={port}", f"SMTP_SECURITY={security}"]
+        prompt = "SMTP のパスワード（入力内容は表示されません）: "
 
     password = ""
     while not password:
-        password = getpass.getpass("パスワード（アプリ用パスワード。入力は表示されません）: ").replace(" ", "")
+        password = getpass.getpass(prompt).replace(" ", "")
     lines.append(f"SMTP_PASSWORD={password}")
 
     mail_to = input(f"通知先メールアドレス（カンマ区切りで複数可）[{user}]: ").strip()
