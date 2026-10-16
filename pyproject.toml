@@ -1,0 +1,23 @@
+[project]
+name = "duo-checker"
+version = "0.1.0"
+description = "Apple Store（日本）の iPhone Duo 店頭受け取り在庫を監視してメール通知する"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+duo-checker = "duo_checker.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "aiosmtpd>=1.4"]
+investigation = ["playwright>=1.64.0"]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10"]
+build-backend = "uv_build"
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
