@@ -1,0 +1,3 @@
+# ローカルで `npm run test-email` / `npm run simulate` / `npm run dev` を使うときの秘密情報。
+# .dev.vars にコピーして使う（git 管理外）。本番は `npx wrangler secret put RESEND_API_KEY` で設定する。
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx

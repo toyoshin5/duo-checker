@@ -1,0 +1,161 @@
+{
+  "head": {
+    "status": "200",
+    "data": {}
+  },
+  "body": {
+    "stores": [
+      {
+        "storeNumber": "R718",
+        "storeName": "丸の内",
+        "reservationUrl": "http://www.apple.com/jp/retail/marunouchi",
+        "partsAvailability": {
+          "MK244J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK244J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          },
+          "MK254J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK254J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          }
+        }
+      },
+      {
+        "storeNumber": "R079",
+        "storeName": "銀座",
+        "reservationUrl": "http://www.apple.com/jp/retail/ginza",
+        "partsAvailability": {
+          "MK244J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK244J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          },
+          "MK254J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK254J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          }
+        }
+      },
+      {
+        "storeNumber": "R224",
+        "storeName": "表参道",
+        "reservationUrl": "http://www.apple.com/jp/retail/omotesando",
+        "partsAvailability": {
+          "MK244J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK244J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          },
+          "MK254J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK254J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          }
+        }
+      },
+      {
+        "storeNumber": "R128",
+        "storeName": "新宿",
+        "reservationUrl": "http://www.apple.com/jp/retail/shinjuku",
+        "partsAvailability": {
+          "MK244J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK244J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          },
+          "MK254J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK254J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          }
+        }
+      },
+      {
+        "storeNumber": "R119",
+        "storeName": "渋谷",
+        "reservationUrl": "http://www.apple.com/jp/retail/shibuya",
+        "partsAvailability": {
+          "MK244J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK244J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          },
+          "MK254J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK254J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          }
+        }
+      },
+      {
+        "storeNumber": "R710",
+        "storeName": "川崎",
+        "reservationUrl": "http://www.apple.com/jp/retail/kawasaki",
+        "partsAvailability": {
+          "MK244J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK244J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          },
+          "MK254J/A": {
+            "storePickEligible": true,
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "partNumber": "MK254J/A",
+            "purchaseOption": "",
+            "ctoOptions": "",
+            "pickupDisplay": "unavailable",
+            "pickupType": "受け取り方法：店内"
+          }
+        }
+      }
+    ],
+    "storesCount": "100-0005の近くに6件のストアが見つかりました"
+  }
+}

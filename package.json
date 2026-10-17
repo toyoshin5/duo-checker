@@ -1,0 +1,26 @@
+{
+  "name": "duo-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Apple Store（日本）の iPhone Duo 店頭受け取り在庫を Cloudflare Workers で監視してメール通知する",
+  "type": "module",
+  "scripts": {
+    "deploy": "tsx scripts/validate-config.ts && wrangler deploy",
+    "dev": "wrangler dev --test-scheduled",
+    "tail": "wrangler tail --format pretty",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check-config": "tsx scripts/validate-config.ts",
+    "check-once": "tsx scripts/check-once.ts",
+    "test-email": "tsx --env-file-if-exists=.dev.vars scripts/test-email.ts",
+    "simulate": "tsx --env-file-if-exists=.dev.vars scripts/simulate.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261016.1",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.151.1"
+  }
+}

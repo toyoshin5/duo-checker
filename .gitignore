@@ -1,13 +1,13 @@
-# 認証情報・実行時データ
+# Node / Wrangler
+node_modules/
+.wrangler/
+.dev.vars
+
+# Mac 版（mac-safari ブランチ）をこのフォルダで動かしたときのファイル
 .env
 var/
 logs/
-
-# Python / uv
 .venv/
 __pycache__/
-*.pyc
 .pytest_cache/
-
-# 調査時の出力（Apple のページの保存物・スクリーンショット）
 investigation/out/

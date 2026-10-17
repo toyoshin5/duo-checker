@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "duo-checker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // https://duo-checker.<アカウント>.workers.dev/ で直近の確認結果を見られるようにする
+  "workers_dev": true,
+  // 毎分、監視（Durable Object のアラーム）が止まっていないか確かめる。実際の確認間隔は config.ts の intervalSeconds
+  "triggers": { "crons": ["* * * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "MONITOR", "class_name": "Monitor" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Monitor"] }],
+  // 確認結果のログを Cloudflare のダッシュボード（Workers Logs）に残す
+  "observability": { "enabled": true }
+}

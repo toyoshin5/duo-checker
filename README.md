@@ -1,6 +1,6 @@
 # duo-checker
 
-Apple Store（日本）の **iPhone Duo（SIMフリー）の店頭受け取り在庫** を 30 秒ごとに確認し、在庫が復活したらメールで知らせる Mac 用ツールです。
+Apple Store（日本）の **iPhone Duo（SIMフリー）の店頭受け取り在庫** を **Cloudflare Workers** 上で 30 秒ごとに確認し、在庫が復活したらメールで知らせます。PC を起動しておく必要はありません。
 
 - 全国 11 店舗（または指定した店舗）のどこかで在庫が復活したら通知する
 - 在庫ありが続く間は再通知せず、売り切れ後に再入荷したらまた通知する
@@ -9,115 +9,107 @@ Apple Store（日本）の **iPhone Duo（SIMフリー）の店頭受け取り�
 > [!WARNING]
 > Apple の[サイト利用規約](https://www.apple.com/jp/legal/internet-services/terms/site.html)は、自動化された手段でサイトにアクセス・監視することを禁じています。実験目的のツールなので、使う場合は自己責任でお願いします。
 
+Mac の Safari を使う以前の版は [`mac-safari` ブランチ](../../tree/mac-safari) にあります。
+
 ## 必要なもの
 
-- macOS（Safari方式を使う場合はSafari）
-- [uv](https://docs.astral.sh/uv/)（`curl -LsSf https://astral.sh/uv/install.sh | sh`）
-- 通知メールを送るアカウント（Gmail / iCloud / Yahoo!メールなら、アドレスとアプリ用パスワードだけで設定できる）
+- [Cloudflare](https://dash.cloudflare.com/sign-up) のアカウント（無料プランで動く）
+- [Resend](https://resend.com/) のアカウント（メール送信。無料で 1 日 100 通まで）
+- Node.js 20 以上
 
-Apple Account へのログインは不要で、その認証情報も扱いません。
-
-## 使い方
-
-**1. Safari の設定（Safari方式を使う場合だけ、最初の 1 回）**
-Safari の 設定 → 詳細 →「Web デベロッパ用の機能を表示」をオンにし、メニューの 開発 →「Apple Events からの JavaScript を許可」を選ぶ。通常HTTPだけを使う場合は不要です。
-
-**2. 起動**
+## セットアップ
 
 ```sh
 git clone git@github.com:toyoshin5/duo-checker.git
 cd duo-checker
-uv run duo-checker
+npm install
 ```
 
-1. 初回はメール設定を聞かれ、テストメールが届く。Gmail の場合は https://myaccount.google.com/apppasswords でメール送信用のパスワードを作って貼り付ける（普段のパスワードではない。`.env` に権限 600 で保存）
-2. カラーと容量を番号で選ぶ（`--color starwhite --capacity 256gb` のように引数でも指定できる）
-3. `auto` では通常HTTPで監視を開始し、必要なときだけSafari方式へ切り替わります（`DUO_TRANSPORT=safari` なら監視用ウィンドウが開きます）。Ctrl+C で終了します。
+**1. Resend の API キーを作る**
+Resend にサインアップし、[API Keys](https://resend.com/api-keys) で「Create API Key」を押してキーをコピーする（`re_` で始まる文字列）。
 
-「ターミナルが Safari を制御しようとしています」という確認が出たら「OK」を押してください。
+**2. `config.ts` を書き換える**
 
-**3. 常時監視にする（任意）**
+```ts
+colors: ["starwhite"],          // "starwhite"（スターホワイト） / "nightsky"（ナイトスカイ）
+capacities: ["256gb"],          // "256gb" / "512gb" / "1tb" / "2tb"
+mailTo: ["you@example.com"],    // 通知先
+stores: "all",                  // 全国 11 店舗。絞るなら ["R005", "R718"] のように
+```
+
+Resend で独自ドメインを認証していない場合、`mailTo` には **Resend に登録したメールアドレス** しか指定できません。
+
+**3. デプロイして API キーを登録する**
 
 ```sh
-uv run duo-checker install     # カラー・容量を選んで登録。ログインすると自動で起動する
-uv run duo-checker status      # 状態と直近のログ
-uv run duo-checker uninstall   # 解除
+npx wrangler login                        # ブラウザで Cloudflare にログイン
+npm run deploy                            # config.ts を検証してからデプロイ
+npx wrangler secret put RESEND_API_KEY    # 1 でコピーしたキーを貼り付ける
 ```
 
-初回は「"DuoChecker"が"Safari"を制御しようとしています」という確認が出るので「OK」を押してください。動いている間は Mac がスリープしないようにします。ログアウト中は監視できず、ノートの蓋を閉じるとスリープします。
+デプロイ時に表示される `https://duo-checker.<アカウント名>.workers.dev/` を開くと、すぐに監視が始まります（開かなくても 1 分以内に始まる）。このページで、直近の確認結果と通知履歴を確認できます。
 
-## その他のコマンド
+**4. メールが届くか確かめる（任意）**
 
-| コマンド | 内容 |
+```sh
+cp .dev.vars.example .dev.vars    # .dev.vars に API キーを書く（git 管理外）
+npm run test-email                # テストメールを 1 通送る
+npm run simulate                  # 在庫を なし→あり→あり→なし→あり と模擬的に変化させ、2 通だけ届くか確かめる
+```
+
+## 使い方
+
+| やりたいこと | 方法 |
 |---|---|
-| `uv run duo-checker --once` | 1 回だけ確認する |
-| `uv run duo-checker setup` | メール設定をやり直す |
-| `uv run duo-checker test-email` | テストメールを送る |
-| `uv run duo-checker simulate` | 在庫を なし→あり→あり→なし→あり と模擬的に変化させ、通知メールが 2 通だけ届くか確かめる |
-| `uv run duo-checker diagnose` | API・通信方式を少数回比較する（状態・通知を変更しない） |
-
-## 任意の設定（`.env` に追記）
-
-| 変数 | 既定値 | 内容 |
-|---|---|---|
-| `DUO_STORES` | 全店舗 | 監視する店舗番号（例: `R005,R718`） |
-| `DUO_INTERVAL_SECONDS` | `30` | 確認間隔（秒、30 以上） |
-| `DUO_ERROR_ALERT_MINUTES` | `10` | 在庫を取得できない状態がこの分数続いたら警告メールを送る |
-| `DUO_MAC_NOTIFICATION` | `1` | `0` にすると Mac の通知センターに出さない |
-| `DUO_API_MODE` | `auto` | `auto` / `pickup` / `fulfillment` |
-| `DUO_TRANSPORT` | `auto` | `auto` / `http` / `safari` / `curl_cffi` |
-| `DUO_CURL_IMPERSONATE` | `chrome` | `chrome`（curl_cffiの最新対応プロファイル）または `chrome124` など |
-| `DUO_REQUEST_TIMEOUT_SECONDS` | `25` | 1リクエストのタイムアウト |
-| `DUO_541_COOLDOWN_SECONDS` | `120` | HTTP 541 後に通信を止める時間 |
-| `MAIL_TO` | 送信元と同じ | 通知先（カンマ区切りで複数可） |
-
-店舗番号: R718 丸の内 / R079 銀座 / R224 表参道 / R128 新宿 / R119 渋谷 / R710 川崎 / R005 名古屋栄 / R711 京都 / R768 梅田 / R091 心斎橋 / R048 福岡
-
-## ログ
-
-- `logs/monitor.log` — 毎回の確認結果（店舗ごとの ○×）とエラー（日ごとに切り替え、30 日分保存）
-- `logs/notifications.jsonl` — 通知メールの送信履歴
+| 設定を変える | `config.ts` を書き換えて `npm run deploy` |
+| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く |
+| ログをリアルタイムで見る | `npm run tail`（過去のログは Cloudflare ダッシュボードの Workers & Pages → duo-checker → Logs） |
+| 一時停止する | `config.ts` で `enabled: false` にして `npm run deploy` |
+| 完全にやめる | `npx wrangler delete` |
+| この PC から 1 回だけ確認する | `npm run check-once`（メールは送らない） |
 
 ## 仕組み
 
-在庫取得は、次の2つの非公開 API と3つの通信方式を切り替えられます。
+```
+Cron（毎分）── 監視が止まっていないか確認
+        │
+Durable Object「Monitor」── 30 秒ごとのアラームで確認
+   ├ GET https://www.apple.com/jp/shop/retail/pickup-message?parts.0=MK244J/A&store=R718&searchNearby=true
+   │   （近隣店舗もまとめて返るので、丸の内・名古屋栄・福岡の 3 回で 11 店舗を確認）
+   ├ 在庫なし（または初回）→ 在庫あり に変わった店舗だけを通知
+   └ Resend でメール送信（失敗したら次の確認で再送）
+```
 
-| API | リクエストの要点 | JSON の店舗一覧 | 役割 |
-|---|---|---|---|
-| `fulfillment-messages` | `fae=true`, `pl=true`, `cppart=UNLOCKED_JP`, `parts.N`, `store`, `searchNearby=true` | `body.content.pickupMessage.stores` | 既存方式。Safariを優先 |
-| `retail/pickup-message` | `pl=true`, `purchaseOption=fullPrice`, `mts.0=regular`, `parts.N`, `store`, `searchNearby=true` | `body.stores` | 新方式。通常HTTPを優先 |
+- 在庫状態は Durable Object のストレージに保存します。整合性が強く、1 つのインスタンスで動くので、二重通知や二重実行が起きません
+- `fulfillment-messages`（購入ページが使う API）は Workers からは HTTP 541 でブロックされますが、`pickup-message` は取得できます（2026-10 時点）
 
-既定の `auto` は、実測で有効な応答を得た `pickup-message + 通常HTTP` を最初に試し、通信エラー・不正JSON・対象店舗欠落時だけ別候補へ切り替えます。成功した候補は次回から優先します。`541` はレート制限の可能性があるため別方式へ連続切り替えせず、既定120秒冷却してから再試行します。
+### エラーと自動復旧
 
-`DUO_TRANSPORT=safari` は購入ページを開いたSafariの同一オリジン `fetch`、`curl_cffi` はChrome TLS/HTTP2フィンガープリントを使います。固定 `chrome124` も指定できますが、curl_cffiのドキュメントが推奨する最新対応プロファイルに追従するため、既定値はバージョンなしの `chrome` です。
+| 状況 | 対応 |
+|---|---|
+| 541（Apple によるブロック）や通信エラー | そのサイクルの照会をやめ、状態を変えずに次の確認を待つ |
+| 失敗が 3 回以上続く | 確認間隔を 1 分 → 2 分 → 4 分 → 8 分 → 最大 10 分まで延ばす（成功すると戻す） |
+| 失敗が 10 分続く | 警告メールを送る。復旧したら復旧メールを送る |
+| メール送信の失敗 | 次の確認で再送し、失敗が続いたら間隔を延ばす（最大 30 分、1 日で破棄）。冪等キーで二重送信を防ぐ |
 
-HTTP 200でも、要求した店舗と全SKUが応答に含まれなければ成功扱いにしません。541、タイムアウト、不正JSON、対象店舗欠落は「在庫なし」へ変換せず、状態・通知を更新しません。
+本番では、541 が数回に 1 回の割合で返ることがあります。その回は確認を飛ばすだけなので、通知の重複や誤った警告にはなりません。
 
-`diagnose` は代表SKU `MK244J/A` とR718（丸の内）について、fulfillment+Safari、pickup+通常HTTP、pickup+Safari、fulfillment+curl_cffiを比較し、HTTPステータス・応答時間・店舗数・SKU取得状況を表示します。診断用の一時状態ファイルだけを使うため、通常の在庫状態や通知履歴は変更しません。
+### 無料枠の目安（30 秒間隔・11 店舗）
 
-常時監視では、Safari を操作する許可を得るために専用の小さなアプリ `var/DuoChecker.app` を作り、その中で監視を動かします。
+| 項目 | 無料枠 | 使用量の目安 |
+|---|---|---|
+| Workers のリクエスト | 10 万回/日 | 約 1,500 回 |
+| Durable Object のリクエスト | 10 万回/日 | 約 4,300 回 |
+| Durable Object の稼働時間 | 13,000 GB 秒/日 | 約 540 GB 秒 |
+| 1 回の CPU 時間 | 10 ミリ秒 | 1〜4 ミリ秒（実測） |
+| Resend | 100 通/日 | 在庫が復活したときと警告のときだけ |
 
-自動復旧の動き:
-
-- 541 などの異常な応答のとき: Safariはページを読み込み直して1回だけ再試行し、その後は方式を連続切り替えせず冷却する
-- 失敗が続くとき: 確認間隔を最大 10 分まで延ばす。10 分続いたら警告メールを送り、復旧したら復旧メールを送る
-- メールの送信に失敗したとき: 次のサイクルで再送する
-- 監視用ウィンドウが閉じられたとき: 自動で開き直す
-
-## トラブルシューティング
-
-- **Safari を操作する権限がない** → システム設定 → プライバシーとセキュリティ → オートメーション で、ターミナル（常時監視なら DuoChecker）の「Safari」をオンにする
-- **ずっと 541 になる** → Safari で購入ページを開き、「ストアでの受け取り」が表示されるか確認する
-- **メールが届かない** → `uv run duo-checker test-email` を実行し、`logs/notifications.jsonl` を確認する。Gmail は 2 段階認証と[アプリ パスワード](https://myaccount.google.com/apppasswords)が必要
+照会の回数を減らしたい場合は、`intervalSeconds: 60` にするか、店舗を首都圏（R718〜R710）だけに絞ってください（照会が 1 回で済む）。
 
 ## 開発
 
 ```sh
-uv run pytest
+npm test              # テスト
+npm run typecheck     # 型チェック
+npm run dev           # ローカルで実行（手元の workerd からの照会は Apple に 403 で拒否されることがある）
 ```
-
-`investigation/` には、実装前に購入画面と通信内容を調べたときの Playwright スクリプトがあります（`uv sync --group investigation`）。
-
-### API調査メモ
-
-2026-10-17に `MK244J/A`、`searchNearby=true`、店舗R718/R005/R048で確認したところ、`pickup-message` は通常HTTPでHTTP 200のJSONを返し、丸の内6店舗、名古屋栄4店舗、福岡1店舗を返しました。この3地域照会で、カタログに登録した全国11店舗を網羅できます。`fulfillment-messages` の通常HTTPとcurl_cffi（`chrome124`、`chrome`）は今回のセッションではHTTP 541＋HTMLでした。SafariのAppleScript診断はSafari側のApple Events応答がタイムアウトしたため、成功とは判定していません。これは時点・IP・Safariセッションに依存する実測であり、恒久的な成功率を意味しません。
