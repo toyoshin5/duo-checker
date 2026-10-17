@@ -18,7 +18,7 @@ export default defineConfig({
   stores: "all",
 
   // 以下は省略可能（既定値のままでよい）
-  // intervalSeconds: 30,      // 確認間隔（秒、30 以上）
+  // intervalSeconds: 60,      // 確認間隔（秒、30 以上）。短くするほど Apple にブロックされやすい
   // errorAlertMinutes: 10,    // 在庫を取得できない状態がこの分数続いたら警告メール
   // mailFrom: "duo-checker <onboarding@resend.dev>",  // 独自ドメインを Resend で認証したら変更できる
   // enabled: true,            // false にすると監視を止める
