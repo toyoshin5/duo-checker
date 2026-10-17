@@ -1,0 +1,45 @@
+{
+  "head": {
+    "status": "200",
+    "data": {}
+  },
+  "body": {
+    "stores": [
+      {
+        "storeNumber": "R718",
+        "storeName": "丸の内",
+        "reservationUrl": "http://www.apple.com/jp/retail/marunouchi",
+        "partsAvailability": {
+          "MK244J/A": {
+            "pickupDisplay": "unavailable",
+            "pickupSearchQuote": "現在ご利用いただけません",
+            "messageTypes": {
+              "regular": {
+                "storePickupProductTitle": "iPhone Duo 256GB スターホワイト"
+              }
+            }
+          },
+          "MK254J/A": {
+            "pickupDisplay": "available",
+            "pickupSearchQuote": "本日"
+          }
+        }
+      },
+      {
+        "storeNumber": "R079",
+        "storeName": "銀座",
+        "reservationUrl": "http://www.apple.com/jp/retail/ginza",
+        "partsAvailability": {
+          "MK244J/A": {
+            "pickupDisplay": "unavailable",
+            "pickupSearchQuote": "現在ご利用いただけません"
+          },
+          "MK254J/A": {
+            "pickupDisplay": "unavailable",
+            "pickupSearchQuote": "現在ご利用いただけません"
+          }
+        }
+      }
+    ]
+  }
+}

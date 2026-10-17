@@ -6,6 +6,7 @@
 
 import getpass
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,6 +80,15 @@ class SmtpSettings:
 
 
 @dataclass(frozen=True)
+class InventorySettings:
+    api_mode: str = "auto"  # auto | pickup | fulfillment
+    transport: str = "auto"  # auto | http | safari | curl_cffi
+    curl_impersonate: str = "chrome"
+    request_timeout_seconds: float = 25.0
+    rate_limit_cooldown_seconds: int = 120
+
+
+@dataclass(frozen=True)
 class Settings:
     smtp: SmtpSettings
     mail_to: list[str]
@@ -87,6 +97,11 @@ class Settings:
     page_reload_minutes: int
     error_alert_minutes: int
     mac_notification: bool
+    api_mode: str = "auto"
+    transport: str = "auto"
+    curl_impersonate: str = "chrome"
+    request_timeout_seconds: float = 25.0
+    rate_limit_cooldown_seconds: int = 120
 
 
 def load_dotenv(path: Path = ENV_PATH) -> list[str]:
@@ -111,6 +126,29 @@ def _split(value: str) -> list[str]:
     return [s.strip() for s in value.replace(" ", ",").split(",") if s.strip()]
 
 
+def load_inventory_settings(env: dict[str, str] | None = None) -> InventorySettings:
+    """メール設定なしで在庫取得部分だけを読み込む（diagnose 用）。"""
+
+    env = os.environ if env is None else env
+    api_mode = (env.get("DUO_API_MODE") or "auto").lower()
+    if api_mode not in ("auto", "pickup", "fulfillment"):
+        raise SettingsError("DUO_API_MODE は auto / pickup / fulfillment のいずれかです")
+    transport = (env.get("DUO_TRANSPORT") or "auto").lower()
+    if transport not in ("auto", "http", "safari", "curl_cffi"):
+        raise SettingsError("DUO_TRANSPORT は auto / http / safari / curl_cffi のいずれかです")
+    impersonate = (env.get("DUO_CURL_IMPERSONATE") or "chrome").lower()
+    if impersonate != "chrome" and not re.fullmatch(r"chrome\d+", impersonate):
+        raise SettingsError("DUO_CURL_IMPERSONATE は chrome または chrome124 のような値です")
+    try:
+        timeout = float(env.get("DUO_REQUEST_TIMEOUT_SECONDS") or 25)
+        cooldown = int(env.get("DUO_541_COOLDOWN_SECONDS") or 120)
+    except ValueError:
+        raise SettingsError("DUO_REQUEST_TIMEOUT_SECONDS / DUO_541_COOLDOWN_SECONDS が不正です") from None
+    if timeout <= 0 or cooldown < 1:
+        raise SettingsError("DUO_REQUEST_TIMEOUT_SECONDS は正数、DUO_541_COOLDOWN_SECONDS は1以上です")
+    return InventorySettings(api_mode, transport, impersonate, timeout, cooldown)
+
+
 def load_settings(env: dict[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     user = env.get("SMTP_USER", "")
@@ -132,6 +170,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
     if unknown:
         raise SettingsError(f"DUO_STORES に未知の店舗番号があります: {', '.join(unknown)}（一覧は README を参照）")
 
+    inventory = load_inventory_settings(env)
     return Settings(
         smtp=SmtpSettings(
             host=host,
@@ -147,6 +186,11 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         page_reload_minutes=int(env.get("DUO_PAGE_RELOAD_MINUTES") or 30),
         error_alert_minutes=int(env.get("DUO_ERROR_ALERT_MINUTES") or 10),
         mac_notification=(env.get("DUO_MAC_NOTIFICATION", "1") not in ("0", "false", "no")),
+        api_mode=inventory.api_mode,
+        transport=inventory.transport,
+        curl_impersonate=inventory.curl_impersonate,
+        request_timeout_seconds=inventory.request_timeout_seconds,
+        rate_limit_cooldown_seconds=inventory.rate_limit_cooldown_seconds,
     )
 
 
@@ -194,6 +238,8 @@ def run_setup_wizard(path: Path = ENV_PATH) -> None:
         "# DUO_STORES=R005,R718        # 監視する店舗番号。未指定なら全国の全店舗",
         "# DUO_INTERVAL_SECONDS=30     # 確認間隔（秒、30 以上）",
         "# DUO_MAC_NOTIFICATION=1      # メールに加えて Mac の通知センターにも表示する",
+        "# DUO_API_MODE=auto           # auto / pickup / fulfillment",
+        "# DUO_TRANSPORT=auto          # auto / http / safari / curl_cffi",
         "",
     ]
 

@@ -1,5 +1,6 @@
 """監視ループ: 在庫取得 → 状態遷移の判定 → 通知 → ログ。"""
 
+import json
 import logging
 import threading
 import time
@@ -10,7 +11,16 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from .catalog import STORES, Variant
-from .inventory import MAX_PARTS_PER_REQUEST, InventoryError, StoreAvailability, build_query, parse_pickup_response
+from .inventory import (
+    MAX_PARTS_PER_REQUEST,
+    ApiInventorySource,
+    CurlCffiTransport,
+    HttpResponse,
+    InventoryError,
+    RateLimitError,
+    StandardHttpTransport,
+    StoreAvailability,
+)
 from .notifier import Notifier
 from .safari import SafariError, SafariSession, mac_notify
 from .state import AvailabilityTracker, StateStore
@@ -24,12 +34,157 @@ class InventorySource(Protocol):
     def fetch(self, parts: list[str], store: str) -> list[StoreAvailability]: ...
 
 
-class SafariInventorySource:
+class SafariTransport:
+    name = "safari"
+
     def __init__(self, session: SafariSession) -> None:
         self.session = session
 
+    def get(self, path: str, *, referer_part: str):
+        if hasattr(self.session, "fetch_response"):
+            return self.session.fetch_response(path)
+        # 古い差し替え用セッションとの互換性。通常の SafariSession は上の経路を使う。
+        payload = self.session.fetch_json(path)
+        return HttpResponse(200, json.dumps(payload, ensure_ascii=False), 0.0)
+
+
+class SafariInventorySource:
+    """既存の fulfillment + Safari を維持する互換用ソース。"""
+
+    def __init__(self, session: SafariSession, api_mode: str = "fulfillment") -> None:
+        self.session = session
+        self.client = ApiInventorySource(api_mode, SafariTransport(session))
+
+    @property
+    def name(self) -> str:
+        return self.client.name
+
+    @property
+    def last_metrics(self):
+        return self.client.last_metrics
+
     def fetch(self, parts: list[str], store: str) -> list[StoreAvailability]:
-        return parse_pickup_response(self.session.fetch_json(build_query(parts, store)), parts)
+        return self.client.fetch(parts, store)
+
+
+class AutoInventorySource:
+    """複数候補を試し、成功した候補を次回から優先する。
+
+    541 は Apple Shield のレート制限を示すため、別候補を連続で叩かず、
+    外側の RateLimitedInventorySource にそのまま伝える。
+    """
+
+    def __init__(self, candidates: list[InventorySource]) -> None:
+        if not candidates:
+            raise ValueError("在庫取得候補がありません")
+        self.candidates = candidates
+        self.preferred_index = 0
+        self.last_metrics = None
+
+    @property
+    def name(self) -> str:
+        return "auto[" + ",".join(getattr(c, "name", type(c).__name__) for c in self.candidates) + "]"
+
+    def fetch(self, parts: list[str], store: str) -> list[StoreAvailability]:
+        order = [self.preferred_index] + [i for i in range(len(self.candidates)) if i != self.preferred_index]
+        errors: list[str] = []
+        for index in order:
+            candidate = self.candidates[index]
+            try:
+                result = candidate.fetch(parts, store)
+            except RateLimitError:
+                self.last_metrics = getattr(candidate, "last_metrics", None)
+                raise
+            except (InventoryError, SafariError) as error:
+                self.last_metrics = getattr(candidate, "last_metrics", None)
+                errors.append(f"{getattr(candidate, 'name', type(candidate).__name__)}: {error}")
+                continue
+            self.preferred_index = index
+            self.last_metrics = getattr(candidate, "last_metrics", None)
+            return result
+        raise InventoryError("全ての在庫取得方式に失敗しました: " + " / ".join(errors))
+
+
+class RateLimitedInventorySource:
+    """541後の通信を一定時間止めるラッパー。"""
+
+    def __init__(
+        self,
+        source: InventorySource,
+        cooldown_seconds: int = 120,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.source = source
+        self.cooldown_seconds = max(1, cooldown_seconds)
+        self.monotonic = monotonic
+        self.cooldown_until = 0.0
+        self.last_metrics = None
+
+    @property
+    def name(self) -> str:
+        return getattr(self.source, "name", type(self.source).__name__)
+
+    def fetch(self, parts: list[str], store: str) -> list[StoreAvailability]:
+        now = self.monotonic()
+        if now < self.cooldown_until:
+            remaining = int(self.cooldown_until - now + 0.999)
+            raise RateLimitError(f"HTTP 541後の冷却中です（残り約{remaining}秒）")
+        try:
+            result = self.source.fetch(parts, store)
+        except RateLimitError as error:
+            self.last_metrics = getattr(self.source, "last_metrics", None)
+            self.cooldown_until = self.monotonic() + self.cooldown_seconds
+            raise error
+        self.last_metrics = getattr(self.source, "last_metrics", None)
+        return result
+
+
+def make_inventory_source(
+    api_mode: str,
+    transport: str,
+    safari_session: SafariSession,
+    timeout_seconds: float = 25,
+    curl_impersonate: str = "chrome",
+    cooldown_seconds: int = 120,
+) -> InventorySource:
+    """設定から API/通信方式候補を構築する。"""
+
+    if api_mode not in ("auto", "pickup", "fulfillment"):
+        raise ValueError(f"DUO_API_MODE が不正です: {api_mode}")
+    if transport not in ("auto", "http", "safari", "curl_cffi"):
+        raise ValueError(f"DUO_TRANSPORT が不正です: {transport}")
+
+    modes = ["pickup", "fulfillment"] if api_mode == "auto" else [api_mode]
+    candidates: list[InventorySource] = []
+    for mode in modes:
+        if transport == "auto":
+            transports = ["http", "safari"] if mode == "pickup" else ["safari", "curl_cffi"]
+        else:
+            transports = [transport]
+        for transport_name in transports:
+            try:
+                if transport_name == "safari":
+                    client = SafariInventorySource(safari_session, mode)
+                elif transport_name == "http":
+                    client = ApiInventorySource(mode, StandardHttpTransport(timeout_seconds))
+                else:
+                    client = ApiInventorySource(
+                        mode,
+                        CurlCffiTransport(timeout_seconds, impersonate=curl_impersonate),
+                    )
+            except InventoryError:
+                if transport != "auto":
+                    raise
+                log.warning("在庫取得候補 %s/%s を利用できません", mode, transport_name, exc_info=True)
+                continue
+            candidates.append(client)
+
+    source: InventorySource
+    if len(candidates) == 1:
+        source = candidates[0]
+    else:
+        source = AutoInventorySource(candidates)
+    return RateLimitedInventorySource(source, cooldown_seconds=cooldown_seconds)
 
 
 @dataclass
@@ -42,7 +197,7 @@ class CheckResult:
 
     @property
     def ok(self) -> bool:
-        return not self.missing
+        return not self.missing and not self.errors
 
 
 class Monitor:
@@ -82,9 +237,13 @@ class Monitor:
         wanted = set(self.stores)
         observed: dict[str, StoreAvailability] = {}
         pending = list(self.stores)
+        queried: set[str] = set()
         while pending:
             store = pending.pop(0)
-            covered: set[str] = set()
+            if store in queried:
+                continue
+            queried.add(store)
+            coverage: dict[str, set[str]] = {}
             for i in range(0, len(parts), MAX_PARTS_PER_REQUEST):
                 chunk = parts[i : i + MAX_PARTS_PER_REQUEST]
                 try:
@@ -99,9 +258,10 @@ class Monitor:
                 for obs in found:
                     if obs.store_number in wanted:
                         observed[obs.key] = obs
-                        covered.add(obs.store_number)
+                        coverage.setdefault(obs.store_number, set()).add(obs.part_number)
             # searchNearby=true で近隣店舗もまとめて返るので、取得済みの店舗は照会を省く
-            pending = [s for s in pending if s not in covered]
+            covered = {s for s, found_parts in coverage.items() if set(parts) <= found_parts}
+            pending = [s for s in pending if s not in covered and s not in queried]
         result.observations = list(observed.values())
         result.missing = [f"{s}:{p}" for s in self.stores for p in parts if f"{s}:{p}" not in observed]
 

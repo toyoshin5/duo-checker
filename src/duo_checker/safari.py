@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 
 from .catalog import BUY_PAGE_URL
-from .inventory import InventoryError
+from .inventory import HttpResponse, InventoryError, RateLimitError
 from .state import StateStore
 
 log = logging.getLogger(__name__)
@@ -140,19 +140,37 @@ class SafariSession:
         )
         if out == "__TIMEOUT__":
             return 0, "timeout"
-        result = json.loads(out)
-        return int(result["status"]), result["body"]
+        try:
+            result = json.loads(out)
+            return int(result["status"]), result["body"]
+        except (TypeError, KeyError, json.JSONDecodeError) as error:
+            raise SafariError(f"Safari からの在庫 API 結果を解釈できません: {error}") from None
 
-    def fetch_json(self, path: str) -> dict:
-        """在庫 API を呼ぶ。失敗したらページを読み込み直して 1 回だけ再試行する。"""
+    def fetch_response(self, path: str) -> HttpResponse:
+        """在庫 API を呼び、HTTP応答を返す。
+
+        既存動作との互換性のため、異常応答の直後にページを読み込み直して
+        1回だけ再試行する。541を受けた後に無制限に別方式へ切り替えない判断は、
+        呼び出し側の RateLimitError とクールダウンで行う。
+        """
+
         self.prepare()
+        started = time.monotonic()
         status, body = self._fetch_once(path)
         if status != 200 or not body.lstrip().startswith("{"):
             log.warning("在庫 API の応答が異常 (status=%s)。ページを読み込み直して再試行します", status)
             self.reload()
             status, body = self._fetch_once(path)
+        return HttpResponse(status, body, time.monotonic() - started)
+
+    def fetch_json(self, path: str) -> dict:
+        """在庫 API を呼ぶ。失敗したらページを読み込み直して 1 回だけ再試行する。"""
+        response = self.fetch_response(path)
+        status, body = response.status_code, response.body
+        if status == 541:
+            raise RateLimitError(f"在庫 API の応答が異常です (status=541, body={body[:120]!r})")
         if status != 200 or not body.lstrip().startswith("{"):
-            raise InventoryError(f"在庫 API の応答が異常です (status={status}, body={body[:120]!r})")
+            raise InventoryError(f"在庫 API の応答が異常です (status={status}, body={body[:120]!r})", status_code=status)
         try:
             return json.loads(body)
         except json.JSONDecodeError as e:

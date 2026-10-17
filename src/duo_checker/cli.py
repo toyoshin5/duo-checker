@@ -8,10 +8,12 @@
   uv run duo-checker setup                メール設定をやり直す
   uv run duo-checker test-email           テストメールを送る
   uv run duo-checker simulate             在庫復活を模擬して通知の流れを確認する
+  uv run duo-checker diagnose             API・通信方式を比較する（状態を変更しない）
 """
 
 import argparse
 import fcntl
+import json
 import logging
 import os
 import signal
@@ -25,11 +27,21 @@ from pathlib import Path
 
 from . import agent
 from .catalog import CAPACITIES, COLORS, STORES, Variant
-from .inventory import InventoryError, StoreAvailability, build_query, parse_pickup_response
-from .monitor import JST, Monitor, SafariInventorySource
+from .inventory import ApiInventorySource, CurlCffiTransport, InventoryError, StandardHttpTransport, StoreAvailability
+from .monitor import JST, Monitor, SafariInventorySource, make_inventory_source
 from .notifier import Notifier
 from .safari import SafariError, SafariSession, SafariSetupError
-from .settings import DATA_DIR, ENV_PATH, LOG_DIR, Settings, SettingsError, load_dotenv, load_settings, run_setup_wizard
+from .settings import (
+    DATA_DIR,
+    ENV_PATH,
+    LOG_DIR,
+    Settings,
+    SettingsError,
+    load_dotenv,
+    load_inventory_settings,
+    load_settings,
+    run_setup_wizard,
+)
 from .state import StateStore
 
 log = logging.getLogger("duo_checker")
@@ -143,12 +155,11 @@ def keep_awake() -> None:
         log.warning("caffeinate を起動できませんでした。Mac がスリープすると監視が止まります")
 
 
-def preflight(session: SafariSession, variants: list[Variant], store: str) -> None:
-    """起動時に 1 回在庫を取得し、Safari の権限設定などの問題を早めに知らせる。"""
+def preflight(source, variants: list[Variant], store: str) -> None:
+    """起動時に 1 回在庫を取得し、取得方式の問題を早めに知らせる。"""
     parts = [v.part_number for v in variants][:3]
-    print("Safari で在庫を取得できるか確認しています…（Safari に監視用ウィンドウが開きます）")
-    payload = session.fetch_json(build_query(parts, store))
-    found = parse_pickup_response(payload, parts)
+    print(f"在庫取得方式を確認しています…（{getattr(source, 'name', 'auto')}）")
+    found = source.fetch(parts, store)
     print(f"  OK: {len({f.store_number for f in found})} 店舗の在庫情報を取得できました")
 
 
@@ -169,10 +180,18 @@ def cmd_run(args: argparse.Namespace) -> None:
     setup_logging(console=sys.stderr.isatty())
     state = StateStore(DATA_DIR / "state.json")
     session = SafariSession(state, reload_minutes=settings.page_reload_minutes)
+    source = make_inventory_source(
+        settings.api_mode,
+        settings.transport,
+        session,
+        timeout_seconds=settings.request_timeout_seconds,
+        curl_impersonate=settings.curl_impersonate,
+        cooldown_seconds=settings.rate_limit_cooldown_seconds,
+    )
 
-    if interactive:
+    if interactive and not args.once:
         try:
-            preflight(session, variants, settings.stores[0])
+            preflight(source, variants, settings.stores[0])
         except SafariSetupError as e:
             sys.exit(f"\n{e}")
         except (SafariError, InventoryError) as e:
@@ -181,7 +200,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     monitor = Monitor(
         variants,
         settings.stores,
-        SafariInventorySource(session),
+        source,
         state,
         make_notifier(settings),
         interval_seconds=settings.interval_seconds,
@@ -212,6 +231,88 @@ def cmd_test_email(args: argparse.Namespace) -> None:
     settings = ensure_settings(interactive=True)
     if not send_test_email(settings):
         sys.exit(1)
+
+
+def _diagnostic_variants(args: argparse.Namespace) -> list[Variant]:
+    """diagnose は対話を起こさず、未指定なら代表 SKU を1つだけ使う。"""
+
+    color = args.color or "starwhite"
+    capacity = args.capacity or "256gb"
+    colors = choose("", COLORS, color, "--color")
+    capacities = choose("", CAPACITIES, capacity, "--capacity")
+    return [Variant(color_name, capacity_name) for color_name in colors for capacity_name in capacities]
+
+
+def cmd_diagnose(args: argparse.Namespace) -> None:
+    """API/通信方式を比較する。StateStore・Notifier・AvailabilityTracker は使わない。"""
+
+    for warning in load_dotenv(ENV_PATH):
+        print(f"警告: {warning}", file=sys.stderr)
+    try:
+        inventory = load_inventory_settings()
+    except SettingsError as error:
+        sys.exit(str(error))
+    variants = _diagnostic_variants(args)
+    parts = [v.part_number for v in variants]
+    store = args.store.upper()
+
+    # Safari のウィンドウIDだけは既存状態から読み取るが、書き込み先は一時ファイルにする。
+    window_id = 0
+    persistent_state = DATA_DIR / "state.json"
+    if persistent_state.exists():
+        try:
+            window_id = int(json.loads(persistent_state.read_text(encoding="utf-8")).get("safari_window_id") or 0)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            window_id = 0
+
+    cases = [
+        ("fulfillment", "safari"),
+        ("pickup", "http"),
+        ("pickup", "safari"),
+        ("fulfillment", "curl_cffi"),
+    ]
+    print(f"診断: SKU={','.join(parts)} 店舗={store}（状態・通知は更新しません）")
+    with tempfile.TemporaryDirectory(prefix="duo-checker-diagnose-") as temp_dir:
+        temp_state_path = Path(temp_dir) / "state.json"
+        temp_state_path.write_text(json.dumps({"safari_window_id": window_id}), encoding="utf-8")
+        safari_session = SafariSession(StateStore(temp_state_path), reload_minutes=30)
+        for api_mode, transport_name in cases:
+            source = None
+            try:
+                if transport_name == "safari":
+                    source = SafariInventorySource(safari_session, api_mode)
+                elif transport_name == "http":
+                    source = ApiInventorySource(api_mode, StandardHttpTransport(inventory.request_timeout_seconds))
+                else:
+                    source = ApiInventorySource(
+                        api_mode,
+                        CurlCffiTransport(
+                            inventory.request_timeout_seconds,
+                            impersonate=inventory.curl_impersonate,
+                        ),
+                    )
+                observations = source.fetch(parts, store)
+                metrics = source.last_metrics
+                if metrics is None:
+                    print(f"{api_mode}/{transport_name}: 結果情報なし")
+                    continue
+                sku = ",".join(f"{part}={metrics.sku_status.get(part, '?')}" for part in parts)
+                print(
+                    f"{api_mode}/{transport_name}: status={metrics.status_code} "
+                    f"elapsed={metrics.elapsed_seconds:.3f}s stores={metrics.store_count} "
+                    f"sku=[{sku}] valid={metrics.success} observations={len(observations)}"
+                )
+            except (InventoryError, SafariError) as error:
+                metrics = getattr(source, "last_metrics", None)
+                if metrics is None:
+                    print(f"{api_mode}/{transport_name}: error={error}")
+                    continue
+                elapsed = "-" if metrics.elapsed_seconds is None else f"{metrics.elapsed_seconds:.3f}s"
+                sku = ",".join(f"{part}={metrics.sku_status.get(part, '?')}" for part in parts)
+                print(
+                    f"{api_mode}/{transport_name}: status={metrics.status_code} elapsed={elapsed} "
+                    f"stores={metrics.store_count} sku=[{sku}] valid=False error={metrics.error or error}"
+                )
 
 
 class ScriptedSource:
@@ -327,6 +428,9 @@ def main() -> None:
     sub.add_parser("status", help="常時監視の状態を表示する")
     sub.add_parser("setup", help="メール設定をやり直す")
     sub.add_parser("test-email", help="テストメールを送る")
+    diagnose = sub.add_parser("diagnose", help="API・通信方式を比較する（状態・通知を変更しない）")
+    variant_args(diagnose)
+    diagnose.add_argument("--store", default="R718", help="診断対象の店舗番号（既定: R718）")
 
     commands = {
         "run": cmd_run,
@@ -335,6 +439,7 @@ def main() -> None:
         "status": cmd_status,
         "setup": cmd_setup,
         "test-email": cmd_test_email,
+        "diagnose": cmd_diagnose,
         "simulate": cmd_simulate,
     }
     argv = sys.argv[1:]
