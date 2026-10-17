@@ -47,6 +47,8 @@ export class Monitor extends DurableObject<Env> {
     const alarm = await this.ctx.storage.getAlarm();
     // 最長のバックオフ（10 分）より先に予定されているのはおかしいので立て直す
     if (alarm === null || alarm > Date.now() + 11 * 60_000) {
+      // 止まっていた間を「失敗が続いた時間」に数えないよう、異常の記録をリセットしてから始める
+      await this.ctx.storage.delete("health");
       await this.ctx.storage.setAlarm(Date.now());
       console.log("監視を開始しました");
       return "started";
