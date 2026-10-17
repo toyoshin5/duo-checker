@@ -80,6 +80,18 @@ export class Monitor extends DurableObject<Env> {
     }
   }
 
+  /** この Durable Object が動いている拠点と、外部への通信に使われる IP（Cloudflare の trace で確認） */
+  async egress(): Promise<Record<string, string>> {
+    const trace = await (await fetch("https://www.cloudflare.com/cdn-cgi/trace")).text();
+    return Object.fromEntries(
+      trace
+        .trim()
+        .split("\n")
+        .map((line) => line.split("="))
+        .filter(([key]) => ["colo", "ip", "loc"].includes(key)),
+    );
+  }
+
   async status(): Promise<Record<string, unknown>> {
     const { config, error } = loadConfig();
     const storage = this.ctx.storage;
@@ -121,7 +133,9 @@ export default {
     if (url.pathname !== "/") return new Response("Not found", { status: 404 });
     const stub = monitor(env);
     await stub.ensureScheduled(); // デプロイ直後に開けば、Cron を待たずに監視が始まる
-    return new Response(JSON.stringify(await stub.status(), null, 2), {
+    const body: Record<string, unknown> = await stub.status();
+    if (url.searchParams.has("egress")) body.egress = await stub.egress(); // /?egress で通信元を表示（診断用）
+    return new Response(JSON.stringify(body, null, 2), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     });
   },

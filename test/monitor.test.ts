@@ -141,14 +141,25 @@ describe("在庫の取得", () => {
     expect(result.errors[0]).toContain("541");
   });
 
-  it("失敗が続くと確認間隔を延ばし、成功すると戻す", async () => {
+  it("通信エラーが続くと確認間隔を延ばし、成功すると戻す", async () => {
+    const { apple, cycle } = setup();
+    apple.failing.set("R718", 503);
+    const delays = [];
+    for (let i = 0; i < 6; i++) delays.push((await cycle()).nextDelayMs / 1000);
+    expect(delays).toEqual([60, 60, 120, 240, 480, 600]);
+    apple.failing.clear();
+    expect((await cycle()).nextDelayMs).toBe(60_000);
+  });
+
+  it("541 でブロックされたらすぐに 5 分、続けば 10 分休む", async () => {
     const { apple, cycle } = setup();
     apple.failing.set("R718", 541);
-    const delays = [];
-    for (let i = 0; i < 7; i++) delays.push((await cycle()).nextDelayMs / 1000);
-    expect(delays).toEqual([30, 30, 60, 120, 240, 480, 600]);
+    const results = [];
+    for (let i = 0; i < 3; i++) results.push(await cycle());
+    expect(results.map((r) => r.blocked)).toEqual([true, true, true]);
+    expect(results.map((r) => r.nextDelayMs / 1000)).toEqual([300, 600, 600]);
     apple.failing.clear();
-    expect((await cycle()).nextDelayMs).toBe(30_000);
+    expect((await cycle()).nextDelayMs).toBe(60_000);
   });
 });
 

@@ -1,7 +1,7 @@
 // 1 回分の確認処理: 在庫取得 → 状態遷移の判定 → 通知（送信失敗は次回再送）→ 異常継続の警告。
 // 保存先（Durable Object のストレージ）や HTTP・メールは引数で受け取り、テストやローカル実行でも同じ処理を使う。
 
-import { fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
+import { BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
 import { STORES } from "./catalog";
 import type { Config } from "./config";
 import { alertEmail, formatJst, MailError, restockEmail, type Email, type Mailer } from "./notify";
@@ -83,11 +83,14 @@ export interface CycleResult {
   restocked: StoreAvailability[];
   errors: string[];
   sent: number;
+  /** Apple に 541 でブロックされた */
+  blocked: boolean;
   /** 次の確認までの待ち時間（失敗が続くと延びる） */
   nextDelayMs: number;
 }
 
 const MAX_BACKOFF_MS = 10 * 60_000;
+const BLOCKED_COOLDOWN_MS = 5 * 60_000;
 const MAX_HISTORY = 50;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
@@ -104,6 +107,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const wanted = new Set<string>(config.stores);
   const observed = new Map<string, StoreAvailability>();
   const errors: string[] = [];
+  let blocked = false;
   let pending: string[] = [...config.stores];
   while (pending.length) {
     const store = pending.shift()!;
@@ -121,6 +125,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         if (!(error instanceof InventoryError)) throw error;
         // 1 件失敗したら残りも同じ原因で失敗する可能性が高いので、このサイクルの照会は打ち切る
         errors.push(`${store}: ${error.message}`);
+        blocked = error instanceof BlockedError;
         failed = true;
         break;
       }
@@ -224,9 +229,16 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
 
   const interval = config.intervalSeconds * 1000;
   const failures = health.consecutiveFailures;
-  const nextDelayMs = failures < 3 ? interval : Math.min(interval * 2 ** (failures - 2), MAX_BACKOFF_MS);
-  if (nextDelayMs !== interval) log(`失敗が ${failures} 回続いているため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒待ちます`);
-  return { ok, observations, restocked, errors, sent, nextDelayMs };
+  let nextDelayMs: number;
+  if (blocked) {
+    // ブロック中に照会を重ねると長引くので、すぐに長めに休む（5 分 → 10 分）
+    nextDelayMs = Math.max(interval, Math.min(BLOCKED_COOLDOWN_MS * 2 ** Math.min(failures - 1, 4), MAX_BACKOFF_MS));
+    log(`Apple にブロックされたため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒休みます`);
+  } else {
+    nextDelayMs = failures < 3 ? interval : Math.min(interval * 2 ** (failures - 2), MAX_BACKOFF_MS);
+    if (nextDelayMs !== interval) log(`失敗が ${failures} 回続いているため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒待ちます`);
+  }
+  return { ok, observations, restocked, errors, sent, blocked, nextDelayMs };
 }
 
 function newOutboxItem(email: Email, kind: OutboxItem["kind"], at: number): OutboxItem {

@@ -15,7 +15,7 @@ export interface UserConfig {
   mailTo: string[];
   /** 送信元。Resend で独自ドメインを認証していなければ onboarding@resend.dev のまま */
   mailFrom?: string;
-  /** 確認間隔（秒、30 以上） */
+  /** 確認間隔（秒、30 以上。既定 60） */
   intervalSeconds?: number;
   /** 在庫を取得できない状態がこの分数続いたら警告メールを送る */
   errorAlertMinutes?: number;
@@ -63,7 +63,7 @@ export function resolveConfig(raw: UserConfig): Config {
     else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(m)) errors.push(`mailTo のアドレスが不正です: ${m}`);
   }
 
-  const intervalSeconds = raw.intervalSeconds ?? 30;
+  const intervalSeconds = raw.intervalSeconds ?? 60;
   if (!Number.isFinite(intervalSeconds) || intervalSeconds < 30) errors.push("intervalSeconds は 30 以上にしてください");
   const errorAlertMinutes = raw.errorAlertMinutes ?? 10;
   if (!Number.isFinite(errorAlertMinutes) || errorAlertMinutes < 1) errors.push("errorAlertMinutes は 1 以上にしてください");
