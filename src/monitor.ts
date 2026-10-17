@@ -62,6 +62,8 @@ export interface LastCheck {
   expected: number;
   available: string[];
   errors: string[];
+  /** この確認での在庫 API の HTTP ステータス（例: ["200"]、["541"]） */
+  httpStatus: string[];
   summary: string;
 }
 
@@ -92,6 +94,7 @@ export interface CycleResult {
 const MAX_BACKOFF_MS = 10 * 60_000;
 const BLOCKED_COOLDOWN_MS = 5 * 60_000;
 const MAX_HISTORY = 50;
+const RECENT_CHECKS = 30;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
@@ -107,6 +110,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const wanted = new Set<string>(config.stores);
   const observed = new Map<string, StoreAvailability>();
   const errors: string[] = [];
+  const httpStatus: string[] = [];
   let blocked = false;
   let pending: string[] = [...config.stores];
   while (pending.length) {
@@ -115,7 +119,9 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     let failed = false;
     for (let i = 0; i < parts.length; i += MAX_PARTS_PER_REQUEST) {
       try {
-        for (const obs of await fetchPickup(deps.fetchFn, parts.slice(i, i + MAX_PARTS_PER_REQUEST), store)) {
+        const found = await fetchPickup(deps.fetchFn, parts.slice(i, i + MAX_PARTS_PER_REQUEST), store);
+        httpStatus.push("200");
+        for (const obs of found) {
           if (wanted.has(obs.storeNumber)) {
             observed.set(`${obs.storeNumber}:${obs.partNumber}`, obs);
             covered.add(obs.storeNumber);
@@ -123,6 +129,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         }
       } catch (error) {
         if (!(error instanceof InventoryError)) throw error;
+        httpStatus.push(error.status ? String(error.status) : "エラー");
         // 1 件失敗したら残りも同じ原因で失敗する可能性が高いので、このサイクルの照会は打ち切る
         errors.push(`${store}: ${error.message}`);
         blocked = error instanceof BlockedError;
@@ -223,9 +230,14 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     expected: config.stores.length * parts.length,
     available: observations.filter((o) => o.available).map((o) => `Apple ${o.storeName} ${variants.get(o.partNumber)!.displayName}`),
     errors,
+    httpStatus,
     summary,
   };
   await storage.put("lastCheck", lastCheck);
+  // 状況ページで 200 / 541 の推移を見られるよう、直近 30 回分を残す（例: "14:09:14 200"）
+  const recentChecks = (await storage.get<string[]>("recentChecks")) ?? [];
+  recentChecks.push(`${formatJst(checkedAt).slice(11)} ${httpStatus.join(",") || "-"}`);
+  await storage.put("recentChecks", recentChecks.slice(-RECENT_CHECKS));
 
   const interval = config.intervalSeconds * 1000;
   const failures = health.consecutiveFailures;

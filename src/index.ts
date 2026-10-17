@@ -97,15 +97,28 @@ export class Monitor extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const alarm = await storage.getAlarm();
     const history = (await storage.get<HistoryEntry[]>("history")) ?? [];
+    const lastCheck = await storage.get<LastCheck>("lastCheck");
+    const recentChecks = ((await storage.get<string[]>("recentChecks")) ?? []).slice().reverse();
+    const counts: Record<string, number> = {};
+    for (const entry of recentChecks) for (const code of entry.split(" ")[1].split(",")) counts[code] = (counts[code] ?? 0) + 1;
     return {
       state: error ? "設定エラー" : config?.enabled ? "監視中" : "停止中",
+      // 例: "200 正常（14:09:14 の確認）" / "541 ブロック中（14:09:14 の確認）"
+      apple: lastCheck
+        ? `${lastCheck.httpStatus?.join(",") ?? "-"} ${lastCheck.ok ? "正常" : lastCheck.httpStatus?.includes("541") ? "ブロック中" : "異常"}（${lastCheck.at.slice(11)} の確認）`
+        : "まだ確認していません",
+      // 例: "直近 30 回: 200 が 28 回 / 541 が 2 回"
+      recentSummary: recentChecks.length
+        ? `直近 ${recentChecks.length} 回: ${Object.entries(counts).map(([code, n]) => `${code} が ${n} 回`).join(" / ")}`
+        : "",
+      recentChecks,
       configError: error,
       target: config?.variants.map((v) => v.displayName),
       stores: config?.stores.length,
       mailTo: config?.mailTo.map(maskAddress),
       resendApiKey: this.env.RESEND_API_KEY ? "設定済み" : "未設定（npx wrangler secret put RESEND_API_KEY）",
       nextCheckInSeconds: alarm === null ? null : Math.max(0, Math.round((alarm - Date.now()) / 1000)),
-      lastCheck: (await storage.get<LastCheck>("lastCheck")) ?? null,
+      lastCheck: lastCheck ?? null,
       health: (await storage.get("health")) ?? null,
       pendingEmails: ((await storage.get<unknown[]>("outbox")) ?? []).length,
       recentNotifications: history.slice(-10).reverse(),

@@ -67,7 +67,7 @@ npm run simulate                  # 在庫を なし→あり→あり→なし�
 | やりたいこと | 方法 |
 |---|---|
 | 設定を変える | `config.ts` を書き換えて `npm run deploy` |
-| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く |
+| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く（`apple` に直近の HTTP ステータス、`recentChecks` に直近 30 回の 200 / 541 の推移） |
 | ログをリアルタイムで見る | `npm run tail`（過去のログは Cloudflare ダッシュボードの Workers & Pages → duo-checker → Logs） |
 | 一時停止する | `config.ts` で `enabled: false` にして `npm run deploy` |
 | 完全にやめる | `npx wrangler delete` |

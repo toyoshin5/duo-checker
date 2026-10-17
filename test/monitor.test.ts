@@ -132,6 +132,15 @@ describe("在庫の取得", () => {
     expect(result.observations).toHaveLength(4);
   });
 
+  it("HTTP ステータスを記録し、直近の推移を残す", async () => {
+    const { apple, storage, cycle } = setup({ stores: ["R718"] });
+    await cycle();
+    apple.failing.set("R718", 541);
+    await cycle();
+    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["541"]);
+    expect(await storage.get<string[]>("recentChecks")).toEqual(["10:00:00 200", "10:00:30 541"]);
+  });
+
   it("失敗したらそのサイクルの残りの照会をやめる（ブロック中に照会を重ねない）", async () => {
     const { apple, cycle } = setup();
     apple.failing.set("R718", 541);
