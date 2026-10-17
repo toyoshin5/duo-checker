@@ -141,7 +141,7 @@ describe("在庫の取得", () => {
     expect(await storage.get<string[]>("recentChecks")).toEqual(["10:00:00 200", "10:00:30 541"]);
   });
 
-  it("失敗したらそのサイクルの残りの照会をやめる（ブロック中に照会を重ねない）", async () => {
+  it("541応答があればそのサイクルの残りの照会をやめる", async () => {
     const { apple, cycle } = setup();
     apple.failing.set("R718", 541);
     const result = await cycle();
@@ -160,15 +160,16 @@ describe("在庫の取得", () => {
     expect((await cycle()).nextDelayMs).toBe(60_000);
   });
 
-  it("541 でブロックされたらすぐに 5 分、続けば 10 分休む", async () => {
-    const { apple, cycle } = setup();
+  it("連続する541は3分から1分ずつ延ばし、最大10分にする", async () => {
+    const { apple, cycle } = setup({ intervalSeconds: 120 });
     apple.failing.set("R718", 541);
-    const results = [];
-    for (let i = 0; i < 3; i++) results.push(await cycle());
-    expect(results.map((r) => r.blocked)).toEqual([true, true, true]);
-    expect(results.map((r) => r.nextDelayMs / 1000)).toEqual([300, 600, 600]);
+    const delays = [];
+    for (let i = 0; i < 10; i++) delays.push((await cycle()).nextDelayMs / 60_000);
+    expect(delays).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 10, 10]);
     apple.failing.clear();
-    expect((await cycle()).nextDelayMs).toBe(60_000);
+    expect((await cycle()).nextDelayMs).toBe(120_000);
+    apple.failing.set("R718", 541);
+    expect((await cycle()).nextDelayMs).toBe(180_000);
   });
 });
 

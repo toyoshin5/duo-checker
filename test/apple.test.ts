@@ -34,7 +34,7 @@ describe("在庫 API の呼び出し", () => {
     expect(url.searchParams.get("searchNearby")).toBe("true");
   });
 
-  it("541 はブロックとして扱う", async () => {
+  it("541 は在庫取得の失敗として扱う", async () => {
     await expect(fetchPickup(respond("<html>Page Not Found</html>", 541), ["MK244J/A"], "R718")).rejects.toBeInstanceOf(BlockedError);
   });
 

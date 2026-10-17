@@ -1,7 +1,7 @@
 // 1 回分の確認処理: 在庫取得 → 状態遷移の判定 → 通知（送信失敗は次回再送）→ 異常継続の警告。
 // 保存先（Durable Object のストレージ）や HTTP・メールは引数で受け取り、テストやローカル実行でも同じ処理を使う。
 
-import { BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
+import { AppleSession, BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
 import { STORES } from "./catalog";
 import type { Config } from "./config";
 import { alertEmail, formatJst, MailError, restockEmail, type Email, type Mailer } from "./notify";
@@ -33,6 +33,7 @@ interface Health {
   failingSince: number | null;
   alerted: boolean;
   consecutiveFailures: number;
+  consecutiveBlocks: number;
   lastError: string;
 }
 
@@ -85,18 +86,31 @@ export interface CycleResult {
   restocked: StoreAvailability[];
   errors: string[];
   sent: number;
-  /** Apple に 541 でブロックされた */
+  /** 在庫 API から HTTP 541 を受け取った */
   blocked: boolean;
   /** 次の確認までの待ち時間（失敗が続くと延びる） */
   nextDelayMs: number;
 }
 
 const MAX_BACKOFF_MS = 10 * 60_000;
-const BLOCKED_COOLDOWN_MS = 5 * 60_000;
+const BLOCK_BACKOFF_START_MS = 3 * 60_000;
+const BLOCK_BACKOFF_STEP_MS = 60_000;
 const MAX_HISTORY = 50;
 const RECENT_CHECKS = 30;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
+
+export function blockedRetryDelayMs(consecutiveBlocks: number): number {
+  return Math.min(
+    BLOCK_BACKOFF_START_MS + Math.max(0, consecutiveBlocks - 1) * BLOCK_BACKOFF_STEP_MS,
+    MAX_BACKOFF_MS,
+  );
+}
+
+export function failureRetryDelayMs(intervalSeconds: number, consecutiveFailures: number): number {
+  const intervalMs = intervalSeconds * 1000;
+  return consecutiveFailures < 3 ? intervalMs : Math.min(intervalMs * 2 ** (consecutiveFailures - 2), MAX_BACKOFF_MS);
+}
 
 export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const { config, storage } = deps;
@@ -112,6 +126,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const errors: string[] = [];
   const httpStatus: string[] = [];
   let blocked = false;
+  const appleSession = new AppleSession();
   let pending: string[] = [...config.stores];
   while (pending.length) {
     const store = pending.shift()!;
@@ -119,7 +134,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     let failed = false;
     for (let i = 0; i < parts.length; i += MAX_PARTS_PER_REQUEST) {
       try {
-        const found = await fetchPickup(deps.fetchFn, parts.slice(i, i + MAX_PARTS_PER_REQUEST), store);
+        const found = await fetchPickup(deps.fetchFn, parts.slice(i, i + MAX_PARTS_PER_REQUEST), store, appleSession);
         httpStatus.push("200");
         for (const obs of found) {
           if (wanted.has(obs.storeNumber)) {
@@ -167,7 +182,15 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   }
 
   // --- 異常の継続を知らせる ---------------------------------------------------------------
-  const health = (await storage.get<Health>("health")) ?? { failingSince: null, alerted: false, consecutiveFailures: 0, lastError: "" };
+  const health = (await storage.get<Health>("health")) ?? {
+    failingSince: null,
+    alerted: false,
+    consecutiveFailures: 0,
+    consecutiveBlocks: 0,
+    lastError: "",
+  };
+  // 既存の保存データにはこの項目がないので、初回は0として扱う。
+  health.consecutiveBlocks ??= 0;
   const healthBefore = JSON.stringify(health);
   if (ok) {
     if (health.alerted) {
@@ -184,9 +207,10 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
       );
       log("監視が復旧しました");
     }
-    Object.assign(health, { failingSince: null, alerted: false, consecutiveFailures: 0, lastError: "" });
+    Object.assign(health, { failingSince: null, alerted: false, consecutiveFailures: 0, consecutiveBlocks: 0, lastError: "" });
   } else {
     health.consecutiveFailures += 1;
+    health.consecutiveBlocks = blocked ? health.consecutiveBlocks + 1 : 0;
     health.lastError = errors.join("; ") || `応答に含まれない店舗があります: ${missing.join(", ")}`;
     health.failingSince ??= checkedAt;
     if (!health.alerted && checkedAt - health.failingSince >= config.errorAlertMinutes * 60_000) {
@@ -201,7 +225,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
               `失敗が始まった時刻: ${formatJst(health.failingSince)}（日本時間）`,
               `直近のエラー: ${health.lastError}`,
               "",
-              "status=541 の場合は、Apple に Cloudflare からのアクセスをブロックされています。",
+              "status=541 の場合は、HTTP 541 応答のため、この間の在庫状態を確認できていません。",
               "時間をおいても直らなければ、mac-safari ブランチの Mac 版（Safari 経由）を使ってください。",
               "",
               "復旧したら改めてメールでお知らせします。",
@@ -243,11 +267,11 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const failures = health.consecutiveFailures;
   let nextDelayMs: number;
   if (blocked) {
-    // ブロック中に照会を重ねると長引くので、すぐに長めに休む（5 分 → 10 分）
-    nextDelayMs = Math.max(interval, Math.min(BLOCKED_COOLDOWN_MS * 2 ** Math.min(failures - 1, 4), MAX_BACKOFF_MS));
-    log(`Apple にブロックされたため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒休みます`);
+    // 連続する541への再試行は3分から1分ずつ延ばし、最大10分まで待つ。
+    nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks);
+    log(`HTTP 541 応答が ${health.consecutiveBlocks} 回続いたため、次の確認まで ${Math.round(nextDelayMs / 60_000)} 分待ちます`);
   } else {
-    nextDelayMs = failures < 3 ? interval : Math.min(interval * 2 ** (failures - 2), MAX_BACKOFF_MS);
+    nextDelayMs = failureRetryDelayMs(config.intervalSeconds, failures);
     if (nextDelayMs !== interval) log(`失敗が ${failures} 回続いているため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒待ちます`);
   }
   return { ok, observations, restocked, errors, sent, blocked, nextDelayMs };

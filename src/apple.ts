@@ -1,10 +1,11 @@
 // Apple Store の在庫 API（/jp/shop/retail/pickup-message）の呼び出しと解析。
 //
-// fulfillment-messages は自動化クライアントやデータセンターからのアクセスに HTTP 541 を返すが、
-// pickup-message は Cloudflare Workers から通常の fetch で取得できる（2026-10 に実測）。
+// 541 の発生条件や応答を生成したレイヤーは公開情報だけでは特定できない。
+// 541 のときは購入ページを再取得して Cookie を更新し、在庫 API を一度だけ再試行する。
 
 export const API_ORIGIN = "https://www.apple.com";
 export const PICKUP_PATH = "/jp/shop/retail/pickup-message";
+export const BUY_PAGE_URL = `${API_ORIGIN}/jp/shop/buy-iphone/iphone-duo`;
 /** 購入ページの fulfillmentBootstrap.maxParamsPerURL に合わせる */
 export const MAX_PARTS_PER_REQUEST = 3;
 const TIMEOUT_MS = 20_000;
@@ -30,22 +31,116 @@ export class InventoryError extends Error {
   }
 }
 
-/** HTTP 541（Apple のボット対策によるブロック） */
+/** HTTP 541（在庫を取得できない非標準応答。原因はこの応答だけでは特定できない） */
 export class BlockedError extends InventoryError {}
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
+
+interface AppleCookie {
+  value: string;
+  domain: string;
+  hostOnly: boolean;
+  path: string;
+  secure: boolean;
+  expiresAt: number | null;
+}
+
+/** 1 回の監視サイクル中に Apple の Set-Cookie を引き継ぐ。値はログに出さない。 */
+export class AppleSession {
+  private readonly cookies = new Map<string, AppleCookie>();
+
+  reset(): void {
+    this.cookies.clear();
+  }
+
+  cookieHeaderFor(url: string): string {
+    const target = new URL(url);
+    const matching = [...this.cookies.entries()]
+      .filter(([, cookie]) => {
+        if (cookie.expiresAt !== null && cookie.expiresAt <= Date.now()) return false;
+        const domainMatches = cookie.hostOnly
+          ? target.hostname === cookie.domain
+          : target.hostname === cookie.domain || target.hostname.endsWith(`.${cookie.domain}`);
+        const pathMatches = target.pathname === cookie.path
+          || target.pathname.startsWith(cookie.path.endsWith("/") ? cookie.path : `${cookie.path}/`);
+        return domainMatches && pathMatches && (!cookie.secure || target.protocol === "https:");
+      })
+      .sort((a, b) => b[1].path.length - a[1].path.length);
+    return matching.map(([key, cookie]) => `${key.slice(key.lastIndexOf("\0") + 1)}=${cookie.value}`).join("; ");
+  }
+
+  absorb(setCookies: string[], responseUrl: string): void {
+    const source = new URL(responseUrl);
+    for (const setCookie of setCookies) {
+      const pair = setCookie.split(";", 1)[0].trim();
+      const separator = pair.indexOf("=");
+      if (separator <= 0) continue;
+
+      const name = pair.slice(0, separator).trim();
+      const value = pair.slice(separator + 1).trim();
+      const attributes = setCookie.split(";").slice(1).map((attribute) => attribute.trim());
+      const domainAttribute = attributes.find((attribute) => attribute.toLowerCase().startsWith("domain="));
+      const domain = domainAttribute ? domainAttribute.slice("domain=".length).replace(/^\./, "").toLowerCase() : source.hostname;
+      const hostOnly = domainAttribute === undefined;
+      if (source.hostname !== domain && !source.hostname.endsWith(`.${domain}`)) continue;
+
+      const pathAttribute = attributes.find((attribute) => attribute.toLowerCase().startsWith("path="));
+      const path = pathAttribute?.slice("path=".length).startsWith("/")
+        ? pathAttribute.slice("path=".length)
+        : defaultCookiePath(source.pathname);
+      const secure = attributes.some((attribute) => attribute.toLowerCase() === "secure");
+      const maxAge = attributes.find((attribute) => attribute.toLowerCase().startsWith("max-age="));
+      const expires = attributes.find((attribute) => attribute.toLowerCase().startsWith("expires="));
+      const maxAgeSeconds = maxAge === undefined ? undefined : Number(maxAge.slice("max-age=".length));
+      const expiresAt = maxAgeSeconds !== undefined
+        ? Date.now() + maxAgeSeconds * 1000
+        : expires === undefined ? null : Date.parse(expires.slice("expires=".length));
+      const key = `${domain}\0${path}\0${name}`;
+
+      if (expiresAt !== null && expiresAt <= Date.now()) this.cookies.delete(key);
+      else this.cookies.set(key, { value, domain, hostOnly, path, secure, expiresAt: Number.isNaN(expiresAt) ? null : expiresAt });
+    }
+  }
+}
+
+function defaultCookiePath(pathname: string): string {
+  const lastSlash = pathname.lastIndexOf("/");
+  return lastSlash <= 0 ? "/" : pathname.slice(0, lastSlash);
+}
+
+function withCookies(init: RequestInit, session: AppleSession, url: string): RequestInit {
+  const headers = new Headers(init.headers);
+  const cookieHeader = session.cookieHeaderFor(url);
+  if (cookieHeader) headers.set("Cookie", cookieHeader);
+  return { ...init, headers };
+}
 
 /**
  * タイムアウト付きで fetch し、本文まで読む。
  * AbortSignal.timeout() のタイマーは処理が終わっても残り、Workers ではその間イベントが終わらず
  * 稼働時間（Durable Object の課金対象）が延びるため、終わったら必ず解除する。
  */
-export async function fetchText(fetchFn: FetchFn, url: string, init: RequestInit, timeoutMs: number): Promise<{ status: number; ok: boolean; body: string }> {
+export async function fetchText(fetchFn: FetchFn, url: string, init: RequestInit, timeoutMs: number): Promise<{ status: number; ok: boolean; body: string; setCookies: string[] }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`${timeoutMs / 1000} 秒以内に応答がありません`)), timeoutMs);
+  const startedAt = Date.now();
   try {
     const response = await fetchFn(url, { ...init, signal: controller.signal });
-    return { status: response.status, ok: response.ok, body: await response.text() };
+    const body = await response.text();
+    console.log({
+      event: "apple-http",
+      endpoint: new URL(url).pathname,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      responseChars: body.length,
+      contentType: response.headers.get("content-type"),
+      date: response.headers.get("date"),
+      retryAfter: response.headers.get("retry-after"),
+      server: response.headers.get("server"),
+      via: response.headers.get("via"),
+      cfRay: response.headers.get("cf-ray"),
+    });
+    return { status: response.status, ok: response.ok, body, setCookies: response.headers.getSetCookie() };
   } finally {
     clearTimeout(timer);
   }
@@ -83,26 +178,51 @@ export function parsePickupResponse(payload: unknown, parts: string[]): StoreAva
 }
 
 /** 指定店舗（と近隣店舗）の在庫を取得する。指定店舗の情報がなければエラーにする。 */
-export async function fetchPickup(fetchFn: FetchFn, parts: string[], store: string): Promise<StoreAvailability[]> {
+export async function fetchPickup(fetchFn: FetchFn, parts: string[], store: string, session = new AppleSession()): Promise<StoreAvailability[]> {
+  const url = buildPickupUrl(parts, store);
+  const apiInit: RequestInit = {
+    headers: {
+      Accept: "application/json",
+      "Accept-Language": "ja-JP,ja;q=0.9",
+      Referer: BUY_PAGE_URL,
+    },
+  };
   let response: { status: number; body: string };
   try {
-    response = await fetchText(
-      fetchFn,
-      buildPickupUrl(parts, store),
-      {
-        headers: {
-          Accept: "application/json",
-          "Accept-Language": "ja-JP,ja;q=0.9",
-          Referer: "https://www.apple.com/jp/shop/buy-iphone/iphone-duo",
-        },
-      },
-      TIMEOUT_MS,
-    );
+    const initial = await fetchText(fetchFn, url, withCookies(apiInit, session, url), TIMEOUT_MS);
+    session.absorb(initial.setCookies, url);
+    response = initial;
   } catch (error) {
     throw new InventoryError(`在庫 API に接続できません: ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  if (response.status === 541) {
+    // 既存セッションや 541 応答の Cookie を引き継がず、Cookie なしで購入ページから取り直す。
+    session.reset();
+    try {
+      const refreshed = await fetchText(
+        fetchFn,
+        BUY_PAGE_URL,
+        withCookies({ headers: { Accept: "text/html", "Accept-Language": "ja-JP,ja;q=0.9" } }, session, BUY_PAGE_URL),
+        TIMEOUT_MS,
+      );
+      session.absorb(refreshed.setCookies, BUY_PAGE_URL);
+    } catch {
+      // API 応答に含まれていた Cookie は使って、API の再試行自体は行う。
+      console.log({ event: "apple-cookie-refresh", status: "error" });
+    }
+
+    try {
+      const retry = await fetchText(fetchFn, url, withCookies(apiInit, session, url), TIMEOUT_MS);
+      session.absorb(retry.setCookies, url);
+      response = retry;
+    } catch (error) {
+      throw new InventoryError(`HTTP 541 後の在庫 API 再試行に接続できません: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   const body = response.body;
-  if (response.status === 541) throw new BlockedError("在庫 API にブロックされました (status=541)", 541);
+  if (response.status === 541) throw new BlockedError("Cookie を更新して再試行しましたが、在庫 API が HTTP 541 を返しました", 541);
   if (response.status !== 200) throw new InventoryError(`在庫 API の応答が異常です (status=${response.status})`, response.status);
   let payload: unknown;
   try {

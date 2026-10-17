@@ -8,7 +8,7 @@
 import { DurableObject } from "cloudflare:workers";
 import userConfig from "../config";
 import { ConfigError, resolveConfig, type Config } from "./config";
-import { runCycle, type HistoryEntry, type LastCheck, type Storage } from "./monitor";
+import { blockedRetryDelayMs, failureRetryDelayMs, runCycle, type HistoryEntry, type LastCheck, type Storage } from "./monitor";
 import { ResendMailer } from "./notify";
 
 export interface Env {
@@ -45,8 +45,28 @@ export class Monitor extends DurableObject<Env> {
       return error ? "config-error" : "disabled";
     }
     const alarm = await this.ctx.storage.getAlarm();
-    // 最長のバックオフ（10 分）より先に予定されているのはおかしいので立て直す
-    if (alarm === null || alarm > Date.now() + 11 * 60_000) {
+    const health = await this.ctx.storage.get<{ consecutiveBlocks?: number; consecutiveFailures?: number }>("health");
+    // 間隔設定を変えたときも、直近の応答時刻から新しい待ち時間で予約し直す。
+    const consecutiveBlocks = health?.consecutiveBlocks ?? 0;
+    const consecutiveFailures = health?.consecutiveFailures ?? 0;
+    if (alarm !== null) {
+      const lastCheck = await this.ctx.storage.get<{ at?: string }>("lastCheck");
+      const checkedAt = lastCheck?.at ? Date.parse(`${lastCheck.at.replace(" ", "T")}+09:00`) : NaN;
+      if (Number.isFinite(checkedAt)) {
+        const delayMs = consecutiveBlocks > 0
+          ? blockedRetryDelayMs(consecutiveBlocks)
+          : failureRetryDelayMs(config.intervalSeconds, consecutiveFailures);
+        const targetAlarm = checkedAt + delayMs;
+        const adjustedAlarm = Math.max(Date.now() + 1000, targetAlarm);
+        if (Math.abs(alarm - adjustedAlarm) > 30_000) {
+          await this.ctx.storage.setAlarm(adjustedAlarm);
+          console.log("次回確認を新しい間隔設定に合わせました");
+          return "rescheduled";
+        }
+      }
+    }
+    // 不自然に先の時刻に予定されたアラームは立て直す。
+    if (alarm === null || alarm > Date.now() + 21 * 60_000) {
       // 止まっていた間を「失敗が続いた時間」に数えないよう、異常の記録をリセットしてから始める
       await this.ctx.storage.delete("health");
       await this.ctx.storage.setAlarm(Date.now());
@@ -103,9 +123,9 @@ export class Monitor extends DurableObject<Env> {
     for (const entry of recentChecks) for (const code of entry.split(" ")[1].split(",")) counts[code] = (counts[code] ?? 0) + 1;
     return {
       state: error ? "設定エラー" : config?.enabled ? "監視中" : "停止中",
-      // 例: "200 正常（14:09:14 の確認）" / "541 ブロック中（14:09:14 の確認）"
+      // 例: "200 正常（14:09:14 の確認）" / "541 応答（14:09:14 の確認）"
       apple: lastCheck
-        ? `${lastCheck.httpStatus?.join(",") ?? "-"} ${lastCheck.ok ? "正常" : lastCheck.httpStatus?.includes("541") ? "ブロック中" : "異常"}（${lastCheck.at.slice(11)} の確認）`
+        ? `${lastCheck.httpStatus?.join(",") ?? "-"} ${lastCheck.ok ? "正常" : lastCheck.httpStatus?.includes("541") ? "応答" : "異常"}（${lastCheck.at.slice(11)} の確認）`
         : "まだ確認していません",
       // 例: "直近 30 回: 200 が 28 回 / 541 が 2 回"
       recentSummary: recentChecks.length
