@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatJst, MailError, ResendMailer } from "../src/notify";
+import { formatJst, MailError, ResendMailer, SlackError, SlackNotifier } from "../src/notify";
 
 describe("Resend での送信", () => {
   it("API キー・冪等キー・宛先を付けて送る", async () => {
@@ -27,5 +27,25 @@ describe("Resend での送信", () => {
 
   it("日本時間で時刻を書く", () => {
     expect(formatJst(Date.UTC(2026, 9, 16, 15, 30, 5))).toBe("2026-10-17 00:30:05");
+  });
+
+  it("Slack Incoming Webhookに在庫メッセージを送る", async () => {
+    const requests: { url: string; init: RequestInit }[] = [];
+    const notifier = new SlackNotifier("https://hooks.slack.test/services/T/B/S", async (url, init) => {
+      requests.push({ url, init: init! });
+      return new Response("ok", { status: 200 });
+    });
+    await notifier.send({ id: "restock-1", subject: "【在庫あり】iPhone Duo", text: "丸の内 R718" });
+
+    expect(requests[0].url).toBe("https://hooks.slack.test/services/T/B/S");
+    expect(new Headers(requests[0].init.headers).get("content-type")).toBe("application/json");
+    expect(JSON.parse(requests[0].init.body as string)).toEqual({ text: "*【在庫あり】iPhone Duo*\n\n丸の内 R718" });
+  });
+
+  it("SlackのエラーはURLや応答本文を含めずに通知失敗として扱う", async () => {
+    await expect(
+      new SlackNotifier("https://hooks.slack.test/services/T/SECRET", async () => new Response("secret response", { status: 500 }))
+        .send({ id: "x", subject: "s", text: "t" }),
+    ).rejects.toEqual(new SlackError("Slack Webhook がエラーを返しました (status=500)"));
   });
 });

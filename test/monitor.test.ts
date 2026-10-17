@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { FetchFn } from "../src/apple";
+import { AppleSession, type FetchFn } from "../src/apple";
 import { STORES } from "../src/catalog";
 import { resolveConfig, type UserConfig } from "../src/config";
 import { MemoryStorage, runCycle, type CycleDeps, type HistoryEntry } from "../src/monitor";
-import { MailError, type Email, type Mailer } from "../src/notify";
+import { MailError, type Email, type Mailer, type SlackSender } from "../src/notify";
 
 // 在庫 API の代わり。実際の応答と同じく、指定店舗を含む地域の店舗をまとめて返す
 const REGIONS = [["R718", "R079", "R224", "R128", "R119", "R710"], ["R005", "R711", "R768", "R091"], ["R048"]];
@@ -15,6 +15,12 @@ class FakeApple {
 
   fetch: FetchFn = async (input) => {
     const url = new URL(input);
+    if (url.pathname === "/jp/shop/bag") {
+      return new Response("<html>bag</html>", {
+        status: 200,
+        headers: { "Set-Cookie": "dssid2=fake; Path=/; Secure" },
+      });
+    }
     const store = url.searchParams.get("store")!;
     this.calls.push(store);
     const status = this.failing.get(store);
@@ -47,19 +53,28 @@ class FakeMailer implements Mailer {
   }
 }
 
+class FakeSlack implements SlackSender {
+  sent: Email[] = [];
+  async send(message: Email) {
+    this.sent.push(message);
+  }
+}
+
 function setup(overrides: Partial<UserConfig> = {}) {
   const config = resolveConfig({ colors: ["starwhite"], capacities: ["256gb"], stores: "all", mailTo: ["me@example.org"], ...overrides });
   const apple = new FakeApple();
   const mailer = new FakeMailer();
+  const slack = new FakeSlack();
   const storage = new MemoryStorage();
   const clock = { t: Date.UTC(2026, 9, 17, 1, 0, 0) }; // 10:00 JST
-  const deps: CycleDeps = { config, storage, fetchFn: apple.fetch, mailer, now: () => clock.t, log: () => {}, sleep: async () => {} };
+  const appleSession = new AppleSession(() => clock.t);
+  const deps: CycleDeps = { config, storage, fetchFn: apple.fetch, mailer, slack, appleSession, now: () => clock.t, log: () => {}, sleep: async () => {} };
   const cycle = async () => {
     const result = await runCycle(deps);
     clock.t += 30_000;
     return result;
   };
-  return { apple, mailer, storage, clock, cycle };
+  return { apple, mailer, slack, storage, clock, cycle };
 }
 
 describe("通知の判定", () => {
@@ -145,7 +160,7 @@ describe("在庫の取得", () => {
     const { apple, cycle } = setup();
     apple.failing.set("R718", 541);
     const result = await cycle();
-    expect(apple.calls).toEqual(["R718"]);
+    expect(apple.calls).toEqual(["R718", "R718"]);
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toContain("541");
   });
@@ -155,21 +170,40 @@ describe("在庫の取得", () => {
     apple.failing.set("R718", 503);
     const delays = [];
     for (let i = 0; i < 6; i++) delays.push((await cycle()).nextDelayMs / 1000);
-    expect(delays).toEqual([60, 60, 120, 240, 480, 600]);
+    expect(delays).toEqual([30, 60, 120, 240, 480, 600]);
     apple.failing.clear();
-    expect((await cycle()).nextDelayMs).toBe(60_000);
+    expect((await cycle()).nextDelayMs).toBe(30_000);
   });
 
-  it("連続する541は3分から1分ずつ延ばし、最大10分にする", async () => {
+  it("連続する541は30秒、1分、2分から延ばし、最大10分にする", async () => {
     const { apple, cycle } = setup({ intervalSeconds: 120 });
     apple.failing.set("R718", 541);
     const delays = [];
-    for (let i = 0; i < 10; i++) delays.push((await cycle()).nextDelayMs / 60_000);
-    expect(delays).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 10, 10]);
+    for (let i = 0; i < 10; i++) delays.push((await cycle()).nextDelayMs / 1000);
+    expect(delays).toEqual([30, 60, 120, 240, 480, 600, 600, 600, 600, 600]);
     apple.failing.clear();
     expect((await cycle()).nextDelayMs).toBe(120_000);
     apple.failing.set("R718", 541);
-    expect((await cycle()).nextDelayMs).toBe(180_000);
+    expect((await cycle()).nextDelayMs).toBe(30_000);
+  });
+});
+
+describe("Slack通知の判定", () => {
+  it("在庫復活時だけ通知し、在庫なし・継続中・取得失敗では通知しない", async () => {
+    const { apple, slack, cycle } = setup();
+    await cycle();
+    expect(slack.sent).toHaveLength(0);
+
+    apple.available.add("R005");
+    await cycle();
+    expect(slack.sent).toHaveLength(1);
+    expect(slack.sent[0].subject).toContain("在庫あり");
+
+    await cycle();
+    expect(slack.sent).toHaveLength(1);
+    apple.failing.set("R718", 541);
+    await cycle();
+    expect(slack.sent).toHaveLength(1);
   });
 });
 

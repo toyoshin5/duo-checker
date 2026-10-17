@@ -6,14 +6,16 @@
 // - GET / で直近の確認結果と通知履歴を JSON で返す
 
 import { DurableObject } from "cloudflare:workers";
+import { AppleSession } from "./apple";
 import userConfig from "../config";
 import { ConfigError, resolveConfig, type Config } from "./config";
 import { blockedRetryDelayMs, failureRetryDelayMs, runCycle, type HistoryEntry, type LastCheck, type Storage } from "./monitor";
-import { ResendMailer } from "./notify";
+import { ResendMailer, SlackNotifier } from "./notify";
 
 export interface Env {
   MONITOR: DurableObjectNamespace<Monitor>;
   RESEND_API_KEY?: string;
+  SLACK_WEBHOOK_URL?: string;
 }
 
 class DurableStorage implements Storage {
@@ -36,6 +38,9 @@ function loadConfig(): { config?: Config; error?: string } {
 }
 
 export class Monitor extends DurableObject<Env> {
+  // Durable Objectのプロセスが生きている間は、バッグのCookieを同じSessionで再利用する。
+  private readonly appleSession = new AppleSession();
+
   /** アラームが動いていなければ開始する。Cron から毎分呼ばれる */
   async ensureScheduled(): Promise<string> {
     const { config, error } = loadConfig();
@@ -90,6 +95,8 @@ export class Monitor extends DurableObject<Env> {
         storage: new DurableStorage(this.ctx.storage),
         fetchFn: (input, init) => fetch(input, init),
         mailer: new ResendMailer(this.env.RESEND_API_KEY ?? "", config.mailFrom, config.mailTo),
+        slack: this.env.SLACK_WEBHOOK_URL ? new SlackNotifier(this.env.SLACK_WEBHOOK_URL) : undefined,
+        appleSession: this.appleSession,
       });
       delay = result.nextDelayMs;
     } catch (e) {
@@ -137,6 +144,7 @@ export class Monitor extends DurableObject<Env> {
       stores: config?.stores.length,
       mailTo: config?.mailTo.map(maskAddress),
       resendApiKey: this.env.RESEND_API_KEY ? "設定済み" : "未設定（npx wrangler secret put RESEND_API_KEY）",
+      slackWebhook: this.env.SLACK_WEBHOOK_URL ? "設定済み" : "未設定（npx wrangler secret put SLACK_WEBHOOK_URL）",
       nextCheckInSeconds: alarm === null ? null : Math.max(0, Math.round((alarm - Date.now()) / 1000)),
       lastCheck: lastCheck ?? null,
       health: (await storage.get("health")) ?? null,

@@ -4,7 +4,7 @@
 import { AppleSession, BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
 import { STORES } from "./catalog";
 import type { Config } from "./config";
-import { alertEmail, formatJst, MailError, restockEmail, type Email, type Mailer } from "./notify";
+import { alertEmail, formatJst, MailError, restockEmail, type Email, type Mailer, type SlackSender } from "./notify";
 
 export interface Storage {
   get<T>(key: string): Promise<T | undefined>;
@@ -73,6 +73,10 @@ export interface CycleDeps {
   storage: Storage;
   fetchFn: FetchFn;
   mailer: Mailer;
+  /** 在庫復活時だけ送るSlack通知。警告・復旧メールは送らない。 */
+  slack?: SlackSender;
+  /** 同じ監視セッションでCookieウォームアップを再利用する。 */
+  appleSession?: AppleSession;
   now?: () => number;
   log?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -93,23 +97,22 @@ export interface CycleResult {
 }
 
 const MAX_BACKOFF_MS = 10 * 60_000;
-const BLOCK_BACKOFF_START_MS = 3 * 60_000;
-const BLOCK_BACKOFF_STEP_MS = 60_000;
+const BACKOFF_START_MS = 30_000;
 const MAX_HISTORY = 50;
 const RECENT_CHECKS = 30;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
 export function blockedRetryDelayMs(consecutiveBlocks: number): number {
-  return Math.min(
-    BLOCK_BACKOFF_START_MS + Math.max(0, consecutiveBlocks - 1) * BLOCK_BACKOFF_STEP_MS,
-    MAX_BACKOFF_MS,
-  );
+  return exponentialRetryDelayMs(consecutiveBlocks);
 }
 
 export function failureRetryDelayMs(intervalSeconds: number, consecutiveFailures: number): number {
-  const intervalMs = intervalSeconds * 1000;
-  return consecutiveFailures < 3 ? intervalMs : Math.min(intervalMs * 2 ** (consecutiveFailures - 2), MAX_BACKOFF_MS);
+  return Math.min(intervalSeconds * 1000 * 2 ** Math.max(0, consecutiveFailures - 1), MAX_BACKOFF_MS);
+}
+
+function exponentialRetryDelayMs(consecutiveFailures: number): number {
+  return Math.min(BACKOFF_START_MS * 2 ** Math.max(0, consecutiveFailures - 1), MAX_BACKOFF_MS);
 }
 
 export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
@@ -126,7 +129,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const errors: string[] = [];
   const httpStatus: string[] = [];
   let blocked = false;
-  const appleSession = new AppleSession();
+  const appleSession = deps.appleSession ?? new AppleSession();
   let pending: string[] = [...config.stores];
   while (pending.length) {
     const store = pending.shift()!;
@@ -178,7 +181,17 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const outbox = (await storage.get<OutboxItem[]>("outbox")) ?? [];
   if (restocked.length) {
     log(`★ 在庫復活を検知: ${[...new Set(restocked.map((r) => `Apple ${r.storeName}`))].join("、")}`);
-    outbox.push(newOutboxItem(restockEmail(restocked, variants, checkedAt, deps.test), "restock", checkedAt));
+    const message = restockEmail(restocked, variants, checkedAt, deps.test);
+    outbox.push(newOutboxItem(message, "restock", checkedAt));
+    if (deps.slack && !deps.test) {
+      try {
+        await deps.slack.send(message);
+        log("Slackに在庫復活を通知しました");
+      } catch (error) {
+        // Slack障害で在庫確認・メール通知を止めない。警告や復旧はSlackへ送らない。
+        log(`Slack通知に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   // --- 異常の継続を知らせる ---------------------------------------------------------------
@@ -267,14 +280,18 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const failures = health.consecutiveFailures;
   let nextDelayMs: number;
   if (blocked) {
-    // 連続する541への再試行は3分から1分ずつ延ばし、最大10分まで待つ。
+    // 連続する541への再試行は30秒、1分、2分…と延ばし、最大10分まで待つ。
     nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks);
-    log(`HTTP 541 応答が ${health.consecutiveBlocks} 回続いたため、次の確認まで ${Math.round(nextDelayMs / 60_000)} 分待ちます`);
+    log(`HTTP 541 応答が ${health.consecutiveBlocks} 回続いたため、次の確認まで ${formatDelay(nextDelayMs)} 待ちます`);
   } else {
     nextDelayMs = failureRetryDelayMs(config.intervalSeconds, failures);
     if (nextDelayMs !== interval) log(`失敗が ${failures} 回続いているため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒待ちます`);
   }
   return { ok, observations, restocked, errors, sent, blocked, nextDelayMs };
+}
+
+function formatDelay(delayMs: number): string {
+  return delayMs < 60_000 ? `${Math.round(delayMs / 1000)} 秒` : `${Math.round(delayMs / 60_000)} 分`;
 }
 
 function newOutboxItem(email: Email, kind: OutboxItem["kind"], at: number): OutboxItem {

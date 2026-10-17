@@ -1,14 +1,16 @@
 // Apple Store の在庫 API（/jp/shop/retail/pickup-message）の呼び出しと解析。
 //
 // 541 の発生条件や応答を生成したレイヤーは公開情報だけでは特定できない。
-// 541 のときは購入ページを再取得して Cookie を更新し、在庫 API を一度だけ再試行する。
+// 541 のときはバッグページを再取得して Cookie を更新し、在庫 API を一度だけ再試行する。
 
 export const API_ORIGIN = "https://www.apple.com";
 export const PICKUP_PATH = "/jp/shop/retail/pickup-message";
+export const BAG_URL = `${API_ORIGIN}/jp/shop/bag`;
 export const BUY_PAGE_URL = `${API_ORIGIN}/jp/shop/buy-iphone/iphone-duo`;
 /** 購入ページの fulfillmentBootstrap.maxParamsPerURL に合わせる */
 export const MAX_PARTS_PER_REQUEST = 3;
 const TIMEOUT_MS = 20_000;
+const WARM_RETRY_INTERVAL_MS = 60_000;
 
 export interface StoreAvailability {
   storeNumber: string;
@@ -45,19 +47,78 @@ interface AppleCookie {
   expiresAt: number | null;
 }
 
-/** 1 回の監視サイクル中に Apple の Set-Cookie を引き継ぐ。値はログに出さない。 */
+/** Apple の Set-Cookie を同じ監視セッションの在庫 APIへ引き継ぐ。値はログに出さない。 */
 export class AppleSession {
   private readonly cookies = new Map<string, AppleCookie>();
+  private warmed = false;
+  private warmAttemptAt: number | null = null;
+  private warmPromise: Promise<boolean> | null = null;
+
+  constructor(private readonly now: () => number = Date.now) {}
 
   reset(): void {
     this.cookies.clear();
+    this.warmed = false;
+    this.warmAttemptAt = null;
   }
 
   cookieHeaderFor(url: string): string {
+    const matching = this.matchingCookies(url);
+    return matching.map(([key, cookie]) => `${key.slice(key.lastIndexOf("\0") + 1)}=${cookie.value}`).join("; ");
+  }
+
+  /** 指定URLに実際に適用できるCookie名だけを返す。値は返さない。 */
+  cookieNamesFor(url: string): string[] {
+    return this.matchingCookies(url).map(([key]) => key.slice(key.lastIndexOf("\0") + 1));
+  }
+
+  /** バッグの応答が在庫APIに使えるCookieを取得できたか確認してから成功扱いにする。 */
+  async ensureWarm(fetchFn: FetchFn, pickupUrl: string): Promise<boolean> {
+    if (this.warmed) {
+      if (this.cookieNamesFor(pickupUrl).length > 0) return true;
+      this.warmed = false;
+    }
+    // 同じセッションを並行利用しても、同じウォームアップを待つ。
+    if (this.warmPromise) return this.warmPromise;
+    const now = this.now();
+    if (this.warmAttemptAt !== null && now - this.warmAttemptAt < WARM_RETRY_INTERVAL_MS) return false;
+
+    this.warmAttemptAt = now;
+    this.warmPromise = this.warmOnce(fetchFn, pickupUrl).finally(() => {
+      this.warmPromise = null;
+    });
+    return this.warmPromise;
+  }
+
+  private async warmOnce(fetchFn: FetchFn, pickupUrl: string): Promise<boolean> {
+    try {
+      const response = await fetchText(
+        fetchFn,
+        BAG_URL,
+        withCookies(
+          { headers: { Accept: "text/html", "Accept-Language": "ja-JP,ja;q=0.9", Referer: BUY_PAGE_URL } },
+          this,
+          BAG_URL,
+        ),
+        TIMEOUT_MS,
+      );
+      this.absorb(response.setCookies, BAG_URL);
+      const cookieNames = this.cookieNamesFor(pickupUrl);
+      const warmed = response.status >= 200 && response.status < 300 && cookieNames.length > 0;
+      this.warmed = warmed;
+      console.log({ event: "apple-cookie-warm", status: response.status, warmed, cookieNames });
+      return warmed;
+    } catch {
+      console.log({ event: "apple-cookie-warm", status: "error", warmed: false });
+      return false;
+    }
+  }
+
+  private matchingCookies(url: string): [string, AppleCookie][] {
     const target = new URL(url);
-    const matching = [...this.cookies.entries()]
+    return [...this.cookies.entries()]
       .filter(([, cookie]) => {
-        if (cookie.expiresAt !== null && cookie.expiresAt <= Date.now()) return false;
+        if (cookie.expiresAt !== null && cookie.expiresAt <= this.now()) return false;
         const domainMatches = cookie.hostOnly
           ? target.hostname === cookie.domain
           : target.hostname === cookie.domain || target.hostname.endsWith(`.${cookie.domain}`);
@@ -66,7 +127,6 @@ export class AppleSession {
         return domainMatches && pathMatches && (!cookie.secure || target.protocol === "https:");
       })
       .sort((a, b) => b[1].path.length - a[1].path.length);
-    return matching.map(([key, cookie]) => `${key.slice(key.lastIndexOf("\0") + 1)}=${cookie.value}`).join("; ");
   }
 
   absorb(setCookies: string[], responseUrl: string): void {
@@ -93,11 +153,11 @@ export class AppleSession {
       const expires = attributes.find((attribute) => attribute.toLowerCase().startsWith("expires="));
       const maxAgeSeconds = maxAge === undefined ? undefined : Number(maxAge.slice("max-age=".length));
       const expiresAt = maxAgeSeconds !== undefined
-        ? Date.now() + maxAgeSeconds * 1000
+        ? this.now() + maxAgeSeconds * 1000
         : expires === undefined ? null : Date.parse(expires.slice("expires=".length));
       const key = `${domain}\0${path}\0${name}`;
 
-      if (expiresAt !== null && expiresAt <= Date.now()) this.cookies.delete(key);
+      if (expiresAt !== null && expiresAt <= this.now()) this.cookies.delete(key);
       else this.cookies.set(key, { value, domain, hostOnly, path, secure, expiresAt: Number.isNaN(expiresAt) ? null : expiresAt });
     }
   }
@@ -187,6 +247,8 @@ export async function fetchPickup(fetchFn: FetchFn, parts: string[], store: stri
       Referer: BUY_PAGE_URL,
     },
   };
+  // 補助リクエストが失敗しても在庫確認は続ける。成功時だけ同じSessionのCookieをAPIへ送る。
+  await session.ensureWarm(fetchFn, url);
   let response: { status: number; body: string };
   try {
     const initial = await fetchText(fetchFn, url, withCookies(apiInit, session, url), TIMEOUT_MS);
@@ -197,20 +259,9 @@ export async function fetchPickup(fetchFn: FetchFn, parts: string[], store: stri
   }
 
   if (response.status === 541) {
-    // 既存セッションや 541 応答の Cookie を引き継がず、Cookie なしで購入ページから取り直す。
+    // 既存セッションや541応答のCookieを引き継がず、バッグから取り直して既存の1回だけ再試行する。
     session.reset();
-    try {
-      const refreshed = await fetchText(
-        fetchFn,
-        BUY_PAGE_URL,
-        withCookies({ headers: { Accept: "text/html", "Accept-Language": "ja-JP,ja;q=0.9" } }, session, BUY_PAGE_URL),
-        TIMEOUT_MS,
-      );
-      session.absorb(refreshed.setCookies, BUY_PAGE_URL);
-    } catch {
-      // API 応答に含まれていた Cookie は使って、API の再試行自体は行う。
-      console.log({ event: "apple-cookie-refresh", status: "error" });
-    }
+    await session.ensureWarm(fetchFn, url);
 
     try {
       const retry = await fetchText(fetchFn, url, withCookies(apiInit, session, url), TIMEOUT_MS);
@@ -222,7 +273,10 @@ export async function fetchPickup(fetchFn: FetchFn, parts: string[], store: stri
   }
 
   const body = response.body;
-  if (response.status === 541) throw new BlockedError("Cookie を更新して再試行しましたが、在庫 API が HTTP 541 を返しました", 541);
+  if (response.status === 541) {
+    session.reset();
+    throw new BlockedError("Cookie を更新して再試行しましたが、在庫 API が HTTP 541 を返しました", 541);
+  }
   if (response.status !== 200) throw new InventoryError(`在庫 API の応答が異常です (status=${response.status})`, response.status);
   let payload: unknown;
   try {

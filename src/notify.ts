@@ -24,6 +24,12 @@ export interface Mailer {
   send(email: Email): Promise<void>;
 }
 
+export interface SlackSender {
+  send(message: Email): Promise<void>;
+}
+
+export class SlackError extends Error {}
+
 /** 日本時間の "2026-10-17 10:00:05" 形式（日本は夏時間がないので +9 時間で求める） */
 export function formatJst(epochMs: number): string {
   return new Date(epochMs + 9 * 3600_000).toISOString().replace("T", " ").slice(0, 19);
@@ -107,5 +113,36 @@ export class ResendMailer implements Mailer {
     const detail = response.body.slice(0, 300);
     const permanent = response.status >= 400 && response.status < 500 && response.status !== 429 && response.status !== 409;
     throw new MailError(`Resend がエラーを返しました (status=${response.status}): ${detail}`, permanent);
+  }
+}
+
+/** Slack Incoming Webhookへの通知。Webhook URLはログやステータスに出さない。 */
+export class SlackNotifier implements SlackSender {
+  constructor(
+    private readonly webhookUrl: string,
+    private readonly fetchFn: FetchFn = (input, init) => fetch(input, init),
+  ) {}
+
+  async send(message: Email): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Slackへの送信がタイムアウトしました")), 10_000);
+    try {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: `*${message.subject}*\n\n${message.text}` }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw new SlackError(`Slackに接続できません: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      // 応答本文は記録・エラーメッセージに含めない（Webhook URLも秘密情報のため）。
+      await response.text();
+      if (!response.ok) throw new SlackError(`Slack Webhook がエラーを返しました (status=${response.status})`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
