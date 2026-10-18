@@ -44,7 +44,7 @@ interface DoProbeRun {
 }
 
 const PROBE_COOLDOWN_MS = 5 * 60_000;
-const INVENTORY_DO_COUNT = 8;
+const INVENTORY_DO_COUNT = 32;
 
 interface RemotePickupSuccess {
   ok: true;
@@ -98,7 +98,7 @@ export class Monitor extends DurableObject<Env> {
       const checkedAt = lastCheck?.at ? Date.parse(`${lastCheck.at.replace(" ", "T")}+09:00`) : NaN;
       if (Number.isFinite(checkedAt)) {
         const delayMs = consecutiveBlocks > 0
-          ? blockedRetryDelayMs(consecutiveBlocks)
+          ? blockedRetryDelayMs(consecutiveBlocks, INVENTORY_DO_COUNT)
           : failureRetryDelayMs(config.intervalSeconds, consecutiveFailures);
         const targetAlarm = checkedAt + delayMs;
         const adjustedAlarm = Math.max(Date.now() + 1000, targetAlarm);
@@ -140,6 +140,7 @@ export class Monitor extends DurableObject<Env> {
         mailer: new ResendMailer(this.env.RESEND_API_KEY ?? "", config.mailFrom, config.mailTo),
         slack: this.env.SLACK_WEBHOOK_URL ? new SlackNotifier(this.env.SLACK_WEBHOOK_URL) : undefined,
         inventoryLabel: inventoryDoLabel,
+        inventoryCount: INVENTORY_DO_COUNT,
         inventory: async (parts, store) => {
           try {
             const remote = await inventoryDo.pickup(parts, store, inventoryDoLabel);

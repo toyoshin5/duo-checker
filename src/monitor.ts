@@ -79,6 +79,8 @@ export interface CycleDeps {
   inventory?: (parts: string[], store: string) => Promise<StoreAvailability[]>;
   /** recentChecks とサイクルログに付ける取得DOの識別子。 */
   inventoryLabel?: string;
+  /** 切り替えに使う取得DOの数。541 のとき、全DOを試し終えるまでは待たずに次のDOへ進む。 */
+  inventoryCount?: number;
   now?: () => number;
   log?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -100,14 +102,16 @@ export interface CycleResult {
 
 const MAX_BACKOFF_MS = 10 * 60_000;
 const BACKOFF_START_MS = 30_000;
-const BLOCKED_BACKOFF_STEP_MS = 10_000;
 const MAX_HISTORY = 50;
 const RECENT_CHECKS = 50;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
-export function blockedRetryDelayMs(consecutiveBlocks: number): number {
-  return BLOCKED_BACKOFF_STEP_MS * Math.max(1, consecutiveBlocks);
+/** 541 のあとは待たずに次の取得DOへ進む。全DOが続けて 541 を返したら、一巡ごとに 30 秒、1 分、2 分…最大 10 分待つ。 */
+export function blockedRetryDelayMs(consecutiveBlocks: number, inventoryCount: number): number {
+  const count = Math.max(1, inventoryCount);
+  if (consecutiveBlocks % count !== 0) return 0;
+  return exponentialRetryDelayMs(consecutiveBlocks / count);
 }
 
 export function failureRetryDelayMs(intervalSeconds: number, consecutiveFailures: number): number {
@@ -285,9 +289,10 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const failures = health.consecutiveFailures;
   let nextDelayMs: number;
   if (blocked) {
-    // 連続する541は10秒、20秒、30秒…と10秒ずつ延ばし、上限は設けない。
-    nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks);
-    log(`HTTP 541 応答が ${health.consecutiveBlocks} 回続いたため、次の確認まで ${formatDelay(nextDelayMs)} 待ちます`);
+    nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks, deps.inventoryCount ?? 1);
+    log(nextDelayMs === 0
+      ? `HTTP 541 応答のため、待たずに次の取得DOで確認します（連続 ${health.consecutiveBlocks} 回）`
+      : `HTTP 541 応答が ${health.consecutiveBlocks} 回続き、取得DOを一巡したため、次の確認まで ${formatDelay(nextDelayMs)} 待ちます`);
   } else {
     nextDelayMs = failureRetryDelayMs(config.intervalSeconds, failures);
     if (nextDelayMs !== interval) log(`失敗が ${failures} 回続いているため、次の確認まで ${Math.round(nextDelayMs / 1000)} 秒待ちます`);

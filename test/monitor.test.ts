@@ -188,17 +188,18 @@ describe("在庫の取得", () => {
     expect((await cycle()).nextDelayMs).toBe(30_000);
   });
 
-  it("連続する541は10秒ずつ線形に延ばし、上限を設けない", async () => {
-    const { apple, cycle } = setup({ intervalSeconds: 120 });
+  it("541なら待たずに次の取得DOへ進み、全DOで541が続いたら一巡ごとに待つ", async () => {
+    const { apple, deps, cycle } = setup({ intervalSeconds: 120 });
+    deps.inventoryCount = 3;
     apple.failing.set("R718", 541);
     const delays = [];
-    for (let i = 0; i < 10; i++) delays.push((await cycle()).nextDelayMs / 1000);
-    expect(delays).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
-    expect(blockedRetryDelayMs(1_000)).toBe(10_000_000);
+    for (let i = 0; i < 12; i++) delays.push((await cycle()).nextDelayMs / 1000);
+    expect(delays).toEqual([0, 0, 30, 0, 0, 60, 0, 0, 120, 0, 0, 240]);
+    expect(blockedRetryDelayMs(32 * 100, 32)).toBe(600_000);
     apple.failing.clear();
     expect((await cycle()).nextDelayMs).toBe(120_000);
     apple.failing.set("R718", 541);
-    expect((await cycle()).nextDelayMs).toBe(10_000);
+    expect((await cycle()).nextDelayMs).toBe(0);
   });
 });
 
