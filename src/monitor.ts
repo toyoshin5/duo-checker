@@ -79,7 +79,7 @@ export interface CycleDeps {
   inventory?: (parts: string[], store: string) => Promise<StoreAvailability[]>;
   /** recentChecks とサイクルログに付ける取得DOの識別子。 */
   inventoryLabel?: string;
-  /** 切り替えに使う取得DOの数。541 のとき、全DOを試し終えるまでは待たずに次のDOへ進む。 */
+  /** 切り替えに使う取得DOの数。541 のとき、全DOを試し終えるまでは 10 秒後に次のDOで確認する。 */
   inventoryCount?: number;
   now?: () => number;
   log?: (line: string) => void;
@@ -102,15 +102,16 @@ export interface CycleResult {
 
 const MAX_BACKOFF_MS = 10 * 60_000;
 const BACKOFF_START_MS = 30_000;
+const BLOCKED_SWITCH_DELAY_MS = 10_000;
 const MAX_HISTORY = 50;
 const RECENT_CHECKS = 50;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
-/** 541 のあとは待たずに次の取得DOへ進む。全DOが続けて 541 を返したら、一巡ごとに 30 秒、1 分、2 分…最大 10 分待つ。 */
+/** 541 のあとは 10 秒後に次の取得DOで確認する。全DOが続けて 541 を返したら、一巡ごとに 30 秒、1 分、2 分…最大 10 分待つ。 */
 export function blockedRetryDelayMs(consecutiveBlocks: number, inventoryCount: number): number {
   const count = Math.max(1, inventoryCount);
-  if (consecutiveBlocks % count !== 0) return 0;
+  if (consecutiveBlocks % count !== 0) return BLOCKED_SWITCH_DELAY_MS;
   return exponentialRetryDelayMs(consecutiveBlocks / count);
 }
 
@@ -285,8 +286,8 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   let nextDelayMs: number;
   if (blocked) {
     nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks, deps.inventoryCount ?? 1);
-    log(nextDelayMs === 0
-      ? `HTTP 541 応答のため、待たずに次の取得DOで確認します（連続 ${health.consecutiveBlocks} 回）`
+    log(nextDelayMs === BLOCKED_SWITCH_DELAY_MS
+      ? `HTTP 541 応答のため、${formatDelay(nextDelayMs)}後に次の取得DOで確認します（連続 ${health.consecutiveBlocks} 回）`
       : `HTTP 541 応答が ${health.consecutiveBlocks} 回続き、取得DOを一巡したため、次の確認まで ${formatDelay(nextDelayMs)} 待ちます`);
   } else {
     nextDelayMs = failureRetryDelayMs(config.intervalSeconds, failures);
