@@ -15,12 +15,6 @@ class FakeApple {
 
   fetch: FetchFn = async (input) => {
     const url = new URL(input);
-    if (url.pathname === "/jp/shop/bag") {
-      return new Response("<html>bag</html>", {
-        status: 200,
-        headers: { "Set-Cookie": "dssid2=fake; Path=/; Secure" },
-      });
-    }
     const store = url.searchParams.get("store")!;
     this.calls.push(store);
     const status = this.failing.get(store);

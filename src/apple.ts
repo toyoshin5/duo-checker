@@ -6,7 +6,7 @@
 export const API_ORIGIN = "https://www.apple.com";
 export const PICKUP_PATH = "/jp/shop/retail/pickup-message";
 export const BUY_PAGE_URL = `${API_ORIGIN}/jp/shop/buy-iphone/iphone-duo`;
-/** 購入ページの fulfillmentBootstrap.maxParamsPerURL に合わせる */
+/** AppleへのURLが過度に長くならないよう、1回の照会に含めるSKU数を制限する */
 export const MAX_PARTS_PER_REQUEST = 3;
 const TIMEOUT_MS = 20_000;
 
@@ -124,7 +124,7 @@ export async function fetchPickup(fetchFn: FetchFn, parts: string[], store: stri
   try {
     payload = JSON.parse(body);
   } catch {
-    throw new InventoryError(`在庫 API の応答が JSON ではありません: ${body.slice(0, 80)}`);
+    throw new InventoryError("在庫 API の応答が JSON ではありません");
   }
   const results = parsePickupResponse(payload, parts);
   const found = new Set(results.filter((r) => r.storeNumber === store).map((r) => r.partNumber));
