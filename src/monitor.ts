@@ -100,13 +100,14 @@ export interface CycleResult {
 
 const MAX_BACKOFF_MS = 10 * 60_000;
 const BACKOFF_START_MS = 30_000;
+const BLOCKED_BACKOFF_STEP_MS = 10_000;
 const MAX_HISTORY = 50;
 const RECENT_CHECKS = 50;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
 export function blockedRetryDelayMs(consecutiveBlocks: number): number {
-  return exponentialRetryDelayMs(consecutiveBlocks);
+  return BLOCKED_BACKOFF_STEP_MS * Math.max(1, consecutiveBlocks);
 }
 
 export function failureRetryDelayMs(intervalSeconds: number, consecutiveFailures: number): number {
@@ -284,7 +285,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const failures = health.consecutiveFailures;
   let nextDelayMs: number;
   if (blocked) {
-    // 連続する541は30秒、1分、2分…と間隔を延ばし、最大10分まで待つ。
+    // 連続する541は10秒、20秒、30秒…と10秒ずつ延ばし、上限は設けない。
     nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks);
     log(`HTTP 541 応答が ${health.consecutiveBlocks} 回続いたため、次の確認まで ${formatDelay(nextDelayMs)} 待ちます`);
   } else {

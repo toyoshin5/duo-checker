@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type FetchFn } from "../src/apple";
 import { STORES } from "../src/catalog";
 import { resolveConfig, type UserConfig } from "../src/config";
-import { MemoryStorage, runCycle, type CycleDeps, type HistoryEntry } from "../src/monitor";
+import { blockedRetryDelayMs, MemoryStorage, runCycle, type CycleDeps, type HistoryEntry } from "../src/monitor";
 import { MailError, type Email, type Mailer, type SlackSender } from "../src/notify";
 
 // 在庫 API の代わり。実際の応答と同じく、指定店舗を含む地域の店舗をまとめて返す
@@ -188,16 +188,17 @@ describe("在庫の取得", () => {
     expect((await cycle()).nextDelayMs).toBe(30_000);
   });
 
-  it("連続する541は30秒、1分、2分から延ばし、最大10分にする", async () => {
+  it("連続する541は10秒ずつ線形に延ばし、上限を設けない", async () => {
     const { apple, cycle } = setup({ intervalSeconds: 120 });
     apple.failing.set("R718", 541);
     const delays = [];
     for (let i = 0; i < 10; i++) delays.push((await cycle()).nextDelayMs / 1000);
-    expect(delays).toEqual([30, 60, 120, 240, 480, 600, 600, 600, 600, 600]);
+    expect(delays).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(blockedRetryDelayMs(1_000)).toBe(10_000_000);
     apple.failing.clear();
     expect((await cycle()).nextDelayMs).toBe(120_000);
     apple.failing.set("R718", 541);
-    expect((await cycle()).nextDelayMs).toBe(30_000);
+    expect((await cycle()).nextDelayMs).toBe(10_000);
   });
 });
 
