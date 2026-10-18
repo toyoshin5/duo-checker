@@ -42,6 +42,16 @@ describe("Resend での送信", () => {
     expect(JSON.parse(requests[0].init.body as string)).toEqual({ text: "*【在庫あり】iPhone Duo*\n\n丸の内 R718" });
   });
 
+  it("Slackでは「ラベル: URL」の行をリンク表記にする", async () => {
+    let body = "";
+    const notifier = new SlackNotifier("https://hooks.slack.test/services/T/B/S", async (_url, init) => {
+      body = init!.body as string;
+      return new Response("ok", { status: 200 });
+    });
+    await notifier.send({ id: "x", subject: "s", text: "・Apple 丸の内（R718） 受け取り: 本日\nバッグ: https://www.apple.com/jp/shop/bag" });
+    expect(JSON.parse(body).text).toBe("*s*\n\n・Apple 丸の内（R718） 受け取り: 本日\n<https://www.apple.com/jp/shop/bag|バッグ>");
+  });
+
   it("SlackのエラーはURLや応答本文を含めずに通知失敗として扱う", async () => {
     await expect(
       new SlackNotifier("https://hooks.slack.test/services/T/SECRET", async () => new Response("secret response", { status: 500 }))

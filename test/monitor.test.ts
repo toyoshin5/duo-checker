@@ -98,18 +98,19 @@ describe("通知の判定", () => {
     apple.available.add("R048");
     await cycle();
     expect(mailer.sent).toHaveLength(1);
-    expect(mailer.sent[0].subject).toBe("【在庫あり】iPhone Duo 256GB スターホワイト — Apple 丸の内 ほか1店舗");
+    expect(mailer.sent[0].subject).toBe("【在庫あり】丸の内ほか1店舗 iPhone Duo 256GB スターホワイト");
     expect(mailer.sent[0].text).toContain("Apple 福岡（R048）");
   });
 
-  it("メール本文に店舗・モデル・容量・カラー・確認時刻・購入ページを含める", async () => {
+  it("メール本文に店舗・モデル・容量・カラー・確認時刻・購入ページ・バッグを含める", async () => {
     const { apple, mailer, cycle } = setup();
     apple.available.add("R005");
     await cycle();
     const text = mailer.sent[0].text;
-    for (const s of ["Apple 名古屋栄（R005）", "iPhone Duo（SIMフリー）", "256GB", "スターホワイト", "受け取り: 本日", "2026-10-17 10:00:00（日本時間）", "https://www.apple.com/jp/shop/buy-iphone/iphone-duo/7.6", "https://www.apple.com/jp/retail/R005"]) {
+    for (const s of ["Apple 名古屋栄（R005）", "iPhone Duo 256GB スターホワイト（SIMフリー）", "受け取り: 本日", "2026-10-17 10:00:00", "https://www.apple.com/jp/shop/buy-iphone/iphone-duo/7.6", "バッグ: https://www.apple.com/jp/shop/bag"]) {
       expect(text).toContain(s);
     }
+    expect(text).not.toContain("/jp/retail/");
   });
 
   it("取得に失敗しても状態を在庫なしに戻さない（エラー明けに重複通知しない）", async () => {
@@ -256,7 +257,7 @@ describe("メール送信の確実性", () => {
     expect(mailer.sent[0].text).toContain("541");
     apple.failing.clear();
     await cycle();
-    expect(mailer.sent.at(-1)!.subject).toBe("【duo-checker】在庫の監視が復旧しました");
+    expect(mailer.sent.at(-1)!.subject).toBe("【duo-checker】在庫の取得が復旧しました");
     expect(mailer.sent).toHaveLength(2);
   });
 });

@@ -4,6 +4,7 @@
 export const MODEL_NAME = "iPhone Duo";
 export const CARRIER_NAME = "SIMフリー";
 export const BUY_PAGE_URL = "https://www.apple.com/jp/shop/buy-iphone/iphone-duo";
+export const BAG_URL = "https://www.apple.com/jp/shop/bag";
 
 export const COLORS = {
   starwhite: "スターホワイト",

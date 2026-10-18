@@ -1,7 +1,7 @@
 // 通知メールの文面と、Resend API での送信。
 
 import { fetchText, type FetchFn, type StoreAvailability } from "./apple";
-import { BUY_PAGE_URL, CARRIER_NAME, MODEL_NAME, type Variant } from "./catalog";
+import { BAG_URL, MODEL_NAME, type Variant } from "./catalog";
 
 export interface Email {
   /** 冪等キー。再送しても同じメールが二重に届かないようにする */
@@ -44,40 +44,28 @@ export function restockEmail(
   const first = items[0];
   const v0 = variants.get(first.partNumber)!;
   const otherStores = new Set(items.map((i) => i.storeNumber)).size - 1;
-  let subject = `【在庫あり】${MODEL_NAME} ${v0.capacityName} ${v0.colorName} — Apple ${first.storeName}`;
-  if (otherStores > 0) subject += ` ほか${otherStores}店舗`;
+  let subject = `【在庫あり】${first.storeName}${otherStores > 0 ? `ほか${otherStores}店舗` : ""} ${MODEL_NAME} ${v0.capacityName} ${v0.colorName}`;
   if (test) subject = `[テスト] ${subject}`;
 
   const lines: string[] = [];
-  if (test) lines.push("※ これは duo-checker のテスト送信です。実際の在庫ではありません。", "");
-  lines.push(`${MODEL_NAME} の店頭受け取り在庫が見つかりました。`, "");
-  for (const item of items) {
-    const v = variants.get(item.partNumber)!;
-    lines.push(
-      `■ Apple ${item.storeName}（${item.storeNumber}）`,
-      `  モデル　: ${MODEL_NAME}（${CARRIER_NAME}）`,
-      `  容量　　: ${v.capacityName}`,
-      `  カラー　: ${v.colorName}`,
-      `  受け取り: ${item.pickupQuote || "—"}`,
-      `  購入ページ: ${v.productUrl}`,
-    );
-    if (item.storeUrl) lines.push(`  店舗ページ: ${item.storeUrl}`);
-    lines.push("");
+  if (test) lines.push("※ テスト送信です。実際の在庫ではありません。", "");
+  lines.push(`店頭受け取りの在庫があります（${formatJst(checkedAt)} 確認）`);
+  // モデルごとに店舗をまとめ、購入ページはモデルごとに 1 回だけ載せる
+  for (const partNumber of new Set(items.map((i) => i.partNumber))) {
+    const v = variants.get(partNumber)!;
+    lines.push("", `■ ${v.displayName}`);
+    for (const item of items.filter((i) => i.partNumber === partNumber)) {
+      lines.push(`・Apple ${item.storeName}（${item.storeNumber}） 受け取り: ${item.pickupQuote || "—"}`);
+    }
+    lines.push(`購入ページ: ${v.productUrl}`);
   }
-  lines.push(
-    `在庫確認時刻: ${formatJst(checkedAt)}（日本時間）`,
-    "",
-    "在庫はすぐになくなることがあります。購入ページで「ストアでの受け取り」を選び、店舗を指定して注文してください。",
-    `商品一覧: ${BUY_PAGE_URL}`,
-    "",
-    "-- duo-checker",
-  );
+  lines.push("", `バッグ: ${BAG_URL}`);
   const key = items.map((i) => `${i.storeNumber}:${i.partNumber}`).join(",");
   return { id: `restock-${checkedAt}-${key}${test ? "-test" : ""}`, subject, text: lines.join("\n") };
 }
 
 export function alertEmail(id: string, subject: string, body: string): Email {
-  return { id, subject, text: `${body}\n\n-- duo-checker` };
+  return { id, subject, text: body };
 }
 
 export class ResendMailer implements Mailer {
@@ -132,7 +120,8 @@ export class SlackNotifier implements SlackSender {
         response = await this.fetchFn(this.webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: `*${message.subject}*\n\n${message.text}` }),
+          // 「ラベル: URL」の行は Slack のリンク表記にして、長い URL を本文に出さない
+          body: JSON.stringify({ text: `*${message.subject}*\n\n${message.text.replace(/^(.+?): (https:\/\/\S+)$/gm, "<$2|$1>")}` }),
           signal: controller.signal,
         });
       } catch (error) {
