@@ -17,7 +17,7 @@ describe("config.ts の検証", () => {
   });
 
   it("誤りをまとめて知らせる", () => {
-    const bad = { ...base, colors: ["gold"], capacities: [], stores: ["R999"], mailTo: ["you@example.com"], intervalSeconds: 10 } as unknown as UserConfig;
+    const bad = { ...base, colors: ["gold"], capacities: [], stores: ["R999"], mailTo: ["you@example.com"], intervalSeconds: 9 } as unknown as UserConfig;
     expect(() => resolveConfig(bad)).toThrow(ConfigError);
     try {
       resolveConfig(bad);

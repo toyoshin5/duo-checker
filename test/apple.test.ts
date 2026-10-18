@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import real from "./fixtures/pickup-message-R718.json";
 import mixed from "./fixtures/pickup-message-mixed.json";
-import { AppleSession, BAG_URL, BlockedError, buildPickupUrl, fetchPickup, fetchText, InventoryError, parsePickupResponse, type FetchFn } from "../src/apple";
+import { BlockedError, buildPickupUrl, fetchPickup, fetchText, InventoryError, parsePickupResponse, type FetchFn } from "../src/apple";
 
 const respond = (body: unknown, status = 200) => async () =>
   new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
@@ -38,102 +38,36 @@ describe("在庫 API の呼び出し", () => {
     await expect(fetchPickup(respond("<html>Page Not Found</html>", 541), ["MK244J/A"], "R718")).rejects.toBeInstanceOf(BlockedError);
   });
 
-  it("最初にバッグを取得し、同じSessionのCookieを在庫APIへ送る", async () => {
+  it("Cookieを保持せず、在庫APIだけを呼び出す", async () => {
     const pickupUrl = buildPickupUrl(["MK244J/A"], "R718");
     const calls: { url: string; cookie: string | null }[] = [];
     const fetchFn: FetchFn = async (input, init) => {
       calls.push({ url: input, cookie: new Headers(init?.headers).get("Cookie") });
-      if (input === BAG_URL) {
-        return new Response("<html>bag</html>", {
-          status: 200,
-          headers: { "Set-Cookie": "dssid2=warm; Path=/; Secure" },
-        });
-      }
       expect(input).toBe(pickupUrl);
-      return new Response(JSON.stringify(real), { status: 200, headers: { "content-type": "application/json" } });
-    };
-
-    await fetchPickup(fetchFn, ["MK244J/A"], "R718", new AppleSession());
-
-    expect(calls.map((call) => call.url)).toEqual([BAG_URL, pickupUrl]);
-    expect(calls[0].cookie).toBeNull();
-    expect(calls[1].cookie).toBe("dssid2=warm");
-  });
-
-  it("バッグが2xxでも在庫APIに適用できるCookieがなければウォームアップ失敗とする", async () => {
-    let bagCalls = 0;
-    const session = new AppleSession();
-    const fetchFn: FetchFn = async (input) => {
-      if (input === BAG_URL) {
-        bagCalls += 1;
-        return new Response("<html>bag</html>", {
-          status: 200,
-          headers: { "Set-Cookie": "bag_only=unused; Path=/jp/shop/bag; Secure" },
-        });
-      }
-      return new Response(JSON.stringify(real));
-    };
-    const pickupUrl = buildPickupUrl(["MK244J/A"], "R718");
-
-    await expect(session.ensureWarm(fetchFn, pickupUrl)).resolves.toBe(false);
-    await expect(session.ensureWarm(fetchFn, pickupUrl)).resolves.toBe(false);
-    expect(session.cookieNamesFor(pickupUrl)).toEqual([]);
-    expect(bagCalls).toBe(1);
-    await expect(fetchPickup(fetchFn, ["MK244J/A"], "R718", session)).resolves.toHaveLength(6);
-    expect(bagCalls).toBe(1);
-  });
-
-  it("並行するウォームアップは1回にまとめ、失敗の再試行は60秒以上空ける", async () => {
-    let now = 0;
-    let bagCalls = 0;
-    let successful = false;
-    const session = new AppleSession(() => now);
-    const pickupUrl = buildPickupUrl(["MK244J/A"], "R718");
-    const fetchFn: FetchFn = async (input) => {
-      if (input !== BAG_URL) throw new Error("unexpected request");
-      bagCalls += 1;
-      return new Response("<html>bag</html>", {
+      return new Response(JSON.stringify(real), {
         status: 200,
-        headers: successful ? { "Set-Cookie": "dssid2=warm; Path=/; Secure" } : undefined,
+        headers: { "content-type": "application/json", "Set-Cookie": "dssid2=ignored; Path=/; Secure" },
       });
     };
 
-    const first = session.ensureWarm(fetchFn, pickupUrl);
-    const second = session.ensureWarm(fetchFn, pickupUrl);
-    await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
-    expect(bagCalls).toBe(1);
+    await fetchPickup(fetchFn, ["MK244J/A"], "R718");
+    await fetchPickup(fetchFn, ["MK244J/A"], "R718");
 
-    now = 59_999;
-    await expect(session.ensureWarm(fetchFn, pickupUrl)).resolves.toBe(false);
-    expect(bagCalls).toBe(1);
-    successful = true;
-    now = 60_000;
-    await expect(session.ensureWarm(fetchFn, pickupUrl)).resolves.toBe(true);
-    expect(bagCalls).toBe(2);
+    expect(calls.map((call) => call.url)).toEqual([pickupUrl, pickupUrl]);
+    expect(calls.map((call) => call.cookie)).toEqual([null, null]);
   });
 
-  it("541時はバッグを取り直して1回だけ再試行し、再度541ならSessionを破棄する", async () => {
+  it("541時は在庫取得失敗として扱う", async () => {
     const pickupUrl = buildPickupUrl(["MK244J/A"], "R718");
     const calls: { url: string; cookie: string | null }[] = [];
-    let bagNumber = 0;
     const fetchFn: FetchFn = async (input, init) => {
       calls.push({ url: input, cookie: new Headers(init?.headers).get("Cookie") });
-      if (input === BAG_URL) {
-        bagNumber += 1;
-        return new Response("<html>bag</html>", {
-          status: 200,
-          headers: { "Set-Cookie": `dssid2=warm${bagNumber}; Path=/; Secure` },
-        });
-      }
       return new Response("<html>blocked</html>", { status: 541 });
     };
-    const session = new AppleSession();
+    await expect(fetchPickup(fetchFn, ["MK244J/A"], "R718")).rejects.toBeInstanceOf(BlockedError);
 
-    await expect(fetchPickup(fetchFn, ["MK244J/A"], "R718", session)).rejects.toBeInstanceOf(BlockedError);
-
-    expect(calls.map((call) => call.url)).toEqual([BAG_URL, pickupUrl, BAG_URL, pickupUrl]);
-    expect(calls.filter((call) => call.url === pickupUrl).map((call) => call.cookie)).toEqual(["dssid2=warm1", "dssid2=warm2"]);
-    expect(session.cookieHeaderFor(pickupUrl)).toBe("");
+    expect(calls.map((call) => call.url)).toEqual([pickupUrl]);
+    expect(calls.map((call) => call.cookie)).toEqual([null]);
   });
 
   it("JSON でない応答・ほかの HTTP エラー・通信エラーは在庫なしとみなさない", async () => {

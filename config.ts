@@ -18,7 +18,7 @@ export default defineConfig({
   stores: ["R718", "R079", "R224", "R128", "R119", "R710"],
 
   // 以下は省略可能（既定値のままでよい）
-  intervalSeconds: 30,        // 通常は30秒間隔。失敗時は30秒、1分、2分…最大10分まで延長
+  intervalSeconds: 10,        // 通常は10秒間隔。失敗時は30秒、1分、2分…最大10分まで延長
   // errorAlertMinutes: 10,    // 在庫を取得できない状態がこの分数続いたら警告メール
   // mailFrom: "duo-checker <onboarding@resend.dev>",  // 独自ドメインを Resend で認証したら変更できる
   // enabled: true,            // false にすると監視を止める

@@ -1,7 +1,7 @@
 // 1 回分の確認処理: 在庫取得 → 状態遷移の判定 → 通知（送信失敗は次回再送）→ 異常継続の警告。
 // 保存先（Durable Object のストレージ）や HTTP・メールは引数で受け取り、テストやローカル実行でも同じ処理を使う。
 
-import { AppleSession, BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
+import { BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
 import { STORES } from "./catalog";
 import type { Config } from "./config";
 import { alertEmail, formatJst, MailError, restockEmail, type Email, type Mailer, type SlackSender } from "./notify";
@@ -63,7 +63,7 @@ export interface LastCheck {
   expected: number;
   available: string[];
   errors: string[];
-  /** この確認での在庫 API の HTTP ステータス（例: ["200"]、["541"]） */
+  /** この確認で実際に叩いた在庫APIのステータスとエンドポイント */
   httpStatus: string[];
   summary: string;
 }
@@ -75,8 +75,10 @@ export interface CycleDeps {
   mailer: Mailer;
   /** 在庫復活時だけ送るSlack通知。警告・復旧メールは送らない。 */
   slack?: SlackSender;
-  /** 同じ監視セッションでCookieウォームアップを再利用する。 */
-  appleSession?: AppleSession;
+  /** 在庫取得を別のDurable Objectなどへ委譲する場合の実装。 */
+  inventory?: (parts: string[], store: string) => Promise<StoreAvailability[]>;
+  /** recentChecks とサイクルログに付ける取得DOの識別子。 */
+  inventoryLabel?: string;
   now?: () => number;
   log?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -99,7 +101,7 @@ export interface CycleResult {
 const MAX_BACKOFF_MS = 10 * 60_000;
 const BACKOFF_START_MS = 30_000;
 const MAX_HISTORY = 50;
-const RECENT_CHECKS = 30;
+const RECENT_CHECKS = 120;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
@@ -129,7 +131,9 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const errors: string[] = [];
   const httpStatus: string[] = [];
   let blocked = false;
-  const appleSession = deps.appleSession ?? new AppleSession();
+  const fetchInventory = deps.inventory
+    ?? ((requestParts: string[], store: string) => fetchPickup(deps.fetchFn, requestParts, store));
+  const statusLabel = deps.inventoryLabel ? ` [${deps.inventoryLabel}]` : "";
   let pending: string[] = [...config.stores];
   while (pending.length) {
     const store = pending.shift()!;
@@ -137,8 +141,8 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     let failed = false;
     for (let i = 0; i < parts.length; i += MAX_PARTS_PER_REQUEST) {
       try {
-        const found = await fetchPickup(deps.fetchFn, parts.slice(i, i + MAX_PARTS_PER_REQUEST), store, appleSession);
-        httpStatus.push("200");
+        const found = await fetchInventory(parts.slice(i, i + MAX_PARTS_PER_REQUEST), store);
+        httpStatus.push(`200 /pickup-message${statusLabel}`);
         for (const obs of found) {
           if (wanted.has(obs.storeNumber)) {
             observed.set(`${obs.storeNumber}:${obs.partNumber}`, obs);
@@ -147,7 +151,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         }
       } catch (error) {
         if (!(error instanceof InventoryError)) throw error;
-        httpStatus.push(error.status ? String(error.status) : "エラー");
+        httpStatus.push(`${error.status ? String(error.status) : "エラー"} /pickup-message${statusLabel}`);
         // 1 件失敗したら残りも同じ原因で失敗する可能性が高いので、このサイクルの照会は打ち切る
         errors.push(`${store}: ${error.message}`);
         blocked = error instanceof BlockedError;
@@ -271,7 +275,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     summary,
   };
   await storage.put("lastCheck", lastCheck);
-  // 状況ページで 200 / 541 の推移を見られるよう、直近 30 回分を残す（例: "14:09:14 200"）
+  // 状況ページで 200 / 541 の推移を見られるよう、通常間隔で約1時間分を残す（例: "14:09:14 200"）
   const recentChecks = (await storage.get<string[]>("recentChecks")) ?? [];
   recentChecks.push(`${formatJst(checkedAt).slice(11)} ${httpStatus.join(",") || "-"}`);
   await storage.put("recentChecks", recentChecks.slice(-RECENT_CHECKS));
@@ -280,7 +284,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const failures = health.consecutiveFailures;
   let nextDelayMs: number;
   if (blocked) {
-    // 連続する541への再試行は30秒、1分、2分…と延ばし、最大10分まで待つ。
+    // 連続する541は30秒、1分、2分…と間隔を延ばし、最大10分まで待つ。
     nextDelayMs = blockedRetryDelayMs(health.consecutiveBlocks);
     log(`HTTP 541 応答が ${health.consecutiveBlocks} 回続いたため、次の確認まで ${formatDelay(nextDelayMs)} 待ちます`);
   } else {

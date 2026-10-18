@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppleSession, type FetchFn } from "../src/apple";
+import { type FetchFn } from "../src/apple";
 import { STORES } from "../src/catalog";
 import { resolveConfig, type UserConfig } from "../src/config";
 import { MemoryStorage, runCycle, type CycleDeps, type HistoryEntry } from "../src/monitor";
@@ -67,14 +67,13 @@ function setup(overrides: Partial<UserConfig> = {}) {
   const slack = new FakeSlack();
   const storage = new MemoryStorage();
   const clock = { t: Date.UTC(2026, 9, 17, 1, 0, 0) }; // 10:00 JST
-  const appleSession = new AppleSession(() => clock.t);
-  const deps: CycleDeps = { config, storage, fetchFn: apple.fetch, mailer, slack, appleSession, now: () => clock.t, log: () => {}, sleep: async () => {} };
+  const deps: CycleDeps = { config, storage, fetchFn: apple.fetch, mailer, slack, now: () => clock.t, log: () => {}, sleep: async () => {} };
   const cycle = async () => {
     const result = await runCycle(deps);
     clock.t += 30_000;
     return result;
   };
-  return { apple, mailer, slack, storage, clock, cycle };
+  return { apple, mailer, slack, storage, clock, deps, cycle };
 }
 
 describe("通知の判定", () => {
@@ -152,15 +151,35 @@ describe("在庫の取得", () => {
     await cycle();
     apple.failing.set("R718", 541);
     await cycle();
-    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["541"]);
-    expect(await storage.get<string[]>("recentChecks")).toEqual(["10:00:00 200", "10:00:30 541"]);
+    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["541 /pickup-message"]);
+    expect(await storage.get<string[]>("recentChecks")).toEqual([
+      "10:00:00 200 /pickup-message",
+      "10:00:30 541 /pickup-message",
+    ]);
+  });
+
+  it("取得DOの識別子を直近ログに残す", async () => {
+    const { deps, storage, cycle } = setup({ stores: ["R718"] });
+    deps.inventoryLabel = "do-3";
+    deps.inventory = async (parts, store) => parts.map((partNumber) => ({
+      storeNumber: store,
+      storeName: STORES[store as keyof typeof STORES],
+      partNumber,
+      available: false,
+      pickupDisplay: "unavailable",
+      pickupQuote: "現在ご利用いただけません",
+      storeUrl: `https://www.apple.com/jp/retail/${store}`,
+    }));
+    await cycle();
+    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["200 /pickup-message [do-3]"]);
+    expect(await storage.get<string[]>("recentChecks")).toEqual(["10:00:00 200 /pickup-message [do-3]"]);
   });
 
   it("541応答があればそのサイクルの残りの照会をやめる", async () => {
     const { apple, cycle } = setup();
     apple.failing.set("R718", 541);
     const result = await cycle();
-    expect(apple.calls).toEqual(["R718", "R718"]);
+    expect(apple.calls).toEqual(["R718"]);
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toContain("541");
   });
