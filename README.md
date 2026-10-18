@@ -2,11 +2,6 @@
 
 Apple Store（日本）の **iPhone Duo（SIM フリー）の店頭受け取り在庫** を Cloudflare Workers で 10 秒ごとに確認し、在庫が復活したらメールと Slack で知らせます。購入やバッグへの追加はしません。
 
-> [!WARNING]
-> Apple の[サイト利用規約](https://www.apple.com/jp/legal/internet-services/terms/site.html)は、自動化された手段でのアクセス・監視を禁じています。実験目的のツールなので、自己責任で使ってください。
-
-Mac の Safari を使う以前の版は [`mac-safari` ブランチ](../../tree/mac-safari) にあります。
-
 ## 仕組み
 
 ```mermaid
@@ -60,9 +55,7 @@ sequenceDiagram
 ```
 
 - 541 が続いても、Apple への確認は 10 秒に 1 回までです。User-Agent や Cookie の偽装はしません。
-- 541 の回は在庫の記録を変えないので、誤って在庫復活を通知することはありません。
 - 在庫を取得できない状態が 10 分続くと警告メールを、戻ると復旧メールを送ります。
-- 2026-10-18 11:07 には、`do-32` が 541 を返した 1 秒後に `do-1` で 200 が返りました（当時は約 1 秒後に切り替えていました）。
 
 ## セットアップ
 
