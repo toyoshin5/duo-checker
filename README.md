@@ -68,7 +68,7 @@ npm run simulate                  # 在庫を なし→あり→あり→なし�
 | やりたいこと | 方法 |
 |---|---|
 | 設定を変える | `config.ts` を書き換えて `npm run deploy` |
-| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く（`apple` に直近の HTTP ステータス、`recentChecks` に約1時間分の `200 /pickup-message [do-1]` のような推移） |
+| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く（`apple` に直近の HTTP ステータス、`recentChecks` に直近50件の `200 [do-1]` のような推移） |
 | 複数DOで比較する | `https://duo-checker.<アカウント名>.workers.dev/probe` をブラウザで開く（比較用の2〜3個の新しいDOが各1回だけ在庫APIを呼び、ステータスと出口情報を返す。実行は5分に1回までで、通常監視の状態・通知は変更しない） |
 | ログをリアルタイムで見る | `npm run tail`（過去のログは Cloudflare ダッシュボードの Workers & Pages → duo-checker → Logs） |
 | 一時停止する | `config.ts` で `enabled: false` にして `npm run deploy` |

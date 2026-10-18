@@ -315,10 +315,11 @@ export class Monitor extends DurableObject<Env> {
     const storage = this.ctx.storage;
     const alarm = await storage.getAlarm();
     const history = (await storage.get<HistoryEntry[]>("history")) ?? [];
-    const lastCheck = await storage.get<LastCheck>("lastCheck");
-    const recentChecks = ((await storage.get<string[]>("recentChecks")) ?? []).slice().reverse();
-    const currentInventoryDoIndex = (await storage.get<number>("inventoryDoIndex")) ?? 0;
-    const currentInventoryDo = ((currentInventoryDoIndex % INVENTORY_DO_COUNT) + INVENTORY_DO_COUNT) % INVENTORY_DO_COUNT;
+    const savedLastCheck = await storage.get<LastCheck>("lastCheck");
+    const lastCheck = savedLastCheck
+      ? { ...savedLastCheck, httpStatus: savedLastCheck.httpStatus?.map(removeEndpoint) ?? [] }
+      : undefined;
+    const recentChecks = ((await storage.get<string[]>("recentChecks")) ?? []).slice().reverse().map(removeEndpoint);
     const counts: Record<string, number> = {};
     for (const entry of recentChecks) {
       const checks = entry.slice(entry.indexOf(" ") + 1).split(",");
@@ -333,7 +334,7 @@ export class Monitor extends DurableObject<Env> {
       apple: lastCheck
         ? `${lastCheck.httpStatus?.join(",") ?? "-"} ${lastCheck.ok ? "正常" : lastCheck.httpStatus?.includes("541") ? "応答" : "異常"}（${lastCheck.at.slice(11)} の確認）`
         : "まだ確認していません",
-      // 例: "直近 120 回: 200 が 118 回 / 541 が 2 回"
+      // 例: "直近 50 回: 200 が 48 回 / 541 が 2 回"
       recentSummary: recentChecks.length
         ? `直近 ${recentChecks.length} 回: ${Object.entries(counts).map(([code, n]) => `${code} が ${n} 回`).join(" / ")}`
         : "",
@@ -349,11 +350,13 @@ export class Monitor extends DurableObject<Env> {
       health: (await storage.get("health")) ?? null,
       pendingEmails: ((await storage.get<unknown[]>("outbox")) ?? []).length,
       recentNotifications: history.slice(-10).reverse(),
-      inventoryDo: `do-${currentInventoryDo + 1}`,
-      inventoryDoCount: INVENTORY_DO_COUNT,
-      probe: (await storage.get<DoProbeRun>("probeLastResult")) ?? null,
     };
   }
+}
+
+function removeEndpoint(value: string): string {
+  // 旧バージョンが保存した "200 /pickup-message [do-2]" も表示時に新形式へそろえる。
+  return value.replace(/\s+\/pickup-message(?=\s|$)/g, "");
 }
 
 function maskAddress(address: string): string {

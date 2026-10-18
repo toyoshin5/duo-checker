@@ -145,10 +145,10 @@ describe("在庫の取得", () => {
     await cycle();
     apple.failing.set("R718", 541);
     await cycle();
-    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["541 /pickup-message"]);
+    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["541"]);
     expect(await storage.get<string[]>("recentChecks")).toEqual([
-      "10:00:00 200 /pickup-message",
-      "10:00:30 541 /pickup-message",
+      "10:00:00 200",
+      "10:00:30 541",
     ]);
   });
 
@@ -165,8 +165,8 @@ describe("在庫の取得", () => {
       storeUrl: `https://www.apple.com/jp/retail/${store}`,
     }));
     await cycle();
-    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["200 /pickup-message [do-3]"]);
-    expect(await storage.get<string[]>("recentChecks")).toEqual(["10:00:00 200 /pickup-message [do-3]"]);
+    expect((await storage.get<{ httpStatus: string[] }>("lastCheck"))!.httpStatus).toEqual(["200 [do-3]"]);
+    expect(await storage.get<string[]>("recentChecks")).toEqual(["10:00:00 200 [do-3]"]);
   });
 
   it("541応答があればそのサイクルの残りの照会をやめる", async () => {
