@@ -9,7 +9,7 @@ import { DurableObject } from "cloudflare:workers";
 import { BlockedError, fetchPickup, InventoryError, PICKUP_PATH, type StoreAvailability } from "./apple";
 import userConfig from "../config";
 import { ConfigError, resolveConfig, type Config } from "./config";
-import { blockedRetryDelayMs, failureRetryDelayMs, runCycle, type HistoryEntry, type LastCheck, type Storage } from "./monitor";
+import { blockedRetryDelayMs, calculateUptimePercent, failureRetryDelayMs, runCycle, type HistoryEntry, type LastCheck, type Storage, type UptimeCheck } from "./monitor";
 import { ResendMailer, SlackNotifier } from "./notify";
 
 export interface Env {
@@ -321,24 +321,14 @@ export class Monitor extends DurableObject<Env> {
       ? { ...savedLastCheck, httpStatus: savedLastCheck.httpStatus?.map(removeEndpoint) ?? [] }
       : undefined;
     const recentChecks = ((await storage.get<string[]>("recentChecks")) ?? []).slice().reverse().map(removeEndpoint);
-    const counts: Record<string, number> = {};
-    for (const entry of recentChecks) {
-      const checks = entry.slice(entry.indexOf(" ") + 1).split(",");
-      for (const check of checks) {
-        const code = check.trim().split(/\s+/, 1)[0];
-        if (code) counts[code] = (counts[code] ?? 0) + 1;
-      }
-    }
+    const uptimeChecks = (await storage.get<UptimeCheck[]>("uptimeChecks")) ?? [];
     return {
       state: error ? "設定エラー" : config?.enabled ? "監視中" : "停止中",
       // 例: "200 正常（14:09:14 の確認）" / "541 応答（14:09:14 の確認）"
       apple: lastCheck
         ? `${lastCheck.httpStatus?.join(",") ?? "-"} ${lastCheck.ok ? "正常" : lastCheck.httpStatus?.includes("541") ? "応答" : "異常"}（${lastCheck.at.slice(11)} の確認）`
         : "まだ確認していません",
-      // 例: "直近 50 回: 200 が 48 回 / 541 が 2 回"
-      recentSummary: recentChecks.length
-        ? `直近 ${recentChecks.length} 回: ${Object.entries(counts).map(([code, n]) => `${code} が ${n} 回`).join(" / ")}`
-        : "",
+      uptimePercent: calculateUptimePercent(uptimeChecks, Date.now()),
       recentChecks,
       configError: error,
       target: config?.variants.map((v) => v.displayName),

@@ -8,7 +8,8 @@
   // 毎分、監視（Durable Object のアラーム）が止まっていないか確かめる。実際の確認間隔は config.ts の intervalSeconds
   "triggers": { "crons": ["* * * * *"] },
   "durable_objects": {
-    "bindings": [{ "name": "MONITOR", "class_name": "Monitor" }]
+    "bindings": [{ "name": "MONITOR", "class_name": "Monitor" }],
+    "code_update_strategy": { "mode": "immediate" }
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Monitor"] }],
   // 確認結果のログを Cloudflare のダッシュボード（Workers Logs）に残す

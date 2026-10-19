@@ -68,6 +68,13 @@ export interface LastCheck {
   summary: string;
 }
 
+export interface UptimeCheck {
+  /** 確認を始めた時刻（Unix epoch milliseconds） */
+  at: number;
+  /** 200 だけを稼働時間として数え、それ以外は稼働時間に数えない */
+  status: number | null;
+}
+
 export interface CycleDeps {
   config: Config;
   storage: Storage;
@@ -105,8 +112,51 @@ const BACKOFF_START_MS = 30_000;
 const BLOCKED_SWITCH_DELAY_MS = 10_000;
 const MAX_HISTORY = 50;
 const RECENT_CHECKS = 50;
+const UPTIME_WINDOW_MS = 60 * 60_000;
+const MAX_UPTIME_CHECKS = 400;
 const MAX_OUTBOX = 50;
 const SEND_RETRY_DELAYS_MS = [0, 2_000, 5_000];
+
+/**
+ * 直近1時間で、直前の確認結果が200だった時間の割合を返す。
+ * 確認結果は次の確認まで有効とみなし、確認より前から続く状態はウィンドウの先頭から数える。
+ */
+export function calculateUptimePercent(checks: UptimeCheck[], now: number): number {
+  const windowStart = now - UPTIME_WINDOW_MS;
+  const sorted = checks
+    .filter((check) => Number.isFinite(check.at) && check.at <= now)
+    .slice()
+    .sort((a, b) => a.at - b.at);
+  if (!sorted.length) return 0;
+
+  let previous: UptimeCheck | undefined;
+  for (const check of sorted) {
+    if (check.at <= windowStart) previous = check;
+    else break;
+  }
+
+  let cursor = windowStart;
+  let uptimeMs = 0;
+  for (const check of sorted) {
+    if (check.at <= windowStart) continue;
+    if (previous?.status === 200) uptimeMs += check.at - cursor;
+    cursor = check.at;
+    previous = check;
+  }
+  if (previous?.status === 200) uptimeMs += now - cursor;
+
+  return Math.round((uptimeMs / UPTIME_WINDOW_MS) * 1000) / 10;
+}
+
+function uptimeStatus(httpStatus: string[]): number | null {
+  if (!httpStatus.length) return null;
+  const codes = httpStatus.map((value) => {
+    const match = /^\s*(\d{3})(?:\s|$)/.exec(value);
+    return match ? Number(match[1]) : null;
+  });
+  if (codes.some((code) => code === null)) return null;
+  return codes.every((code) => code === 200) ? 200 : codes.find((code) => code !== 200) ?? null;
+}
 
 /** 541 のあとは 10 秒後に次の取得DOで確認する。全DOが続けて 541 を返したら、一巡ごとに 30 秒、1 分、2 分…最大 10 分待つ。 */
 export function blockedRetryDelayMs(consecutiveBlocks: number, inventoryCount: number): number {
@@ -280,6 +330,17 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const recentChecks = (await storage.get<string[]>("recentChecks")) ?? [];
   recentChecks.push(`${formatJst(checkedAt).slice(11)} ${httpStatus.join(",") || "-"}`);
   await storage.put("recentChecks", recentChecks.slice(-RECENT_CHECKS));
+
+  const uptimeChecks = (await storage.get<UptimeCheck[]>("uptimeChecks")) ?? [];
+  uptimeChecks.push({ at: checkedAt, status: uptimeStatus(httpStatus) });
+  const uptimeCutoff = checkedAt - UPTIME_WINDOW_MS;
+  const validUptimeChecks = uptimeChecks.filter((check) => Number.isFinite(check.at) && check.at <= checkedAt);
+  const previousUptimeCheck = validUptimeChecks.filter((check) => check.at < uptimeCutoff).at(-1);
+  const currentUptimeChecks = validUptimeChecks.filter((check) => check.at >= uptimeCutoff);
+  await storage.put("uptimeChecks", [
+    ...(previousUptimeCheck ? [previousUptimeCheck] : []),
+    ...currentUptimeChecks,
+  ].slice(-MAX_UPTIME_CHECKS));
 
   const interval = config.intervalSeconds * 1000;
   const failures = health.consecutiveFailures;

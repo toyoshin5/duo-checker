@@ -98,7 +98,7 @@ npx wrangler secret put SLACK_WEBHOOK_URL   # Slack に通知する場合だけ
 
 | やりたいこと | 方法 |
 |---|---|
-| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く（`recentChecks` に直近 50 回の結果） |
+| 状況を見る | `https://duo-checker.<アカウント名>.workers.dev/` を開く（`uptimePercent` に直近 1 時間の稼働率、`recentChecks` に直近 50 回の結果） |
 | 設定を変える | `config.ts` を書き換えて `npm run deploy` |
 | ログを見る | `npm run tail` |
 | 一時停止する | `config.ts` で `enabled: false` にして `npm run deploy` |

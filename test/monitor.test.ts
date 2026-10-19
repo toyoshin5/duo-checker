@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type FetchFn } from "../src/apple";
 import { STORES } from "../src/catalog";
 import { resolveConfig, type UserConfig } from "../src/config";
-import { blockedRetryDelayMs, MemoryStorage, runCycle, type CycleDeps, type HistoryEntry } from "../src/monitor";
+import { blockedRetryDelayMs, calculateUptimePercent, MemoryStorage, runCycle, type CycleDeps, type HistoryEntry, type UptimeCheck } from "../src/monitor";
 import { MailError, type Email, type Mailer, type SlackSender } from "../src/notify";
 
 // 在庫 API の代わり。実際の応答と同じく、指定店舗を含む地域の店舗をまとめて返す
@@ -151,6 +151,10 @@ describe("在庫の取得", () => {
       "10:00:00 200",
       "10:00:30 541",
     ]);
+    expect(await storage.get<UptimeCheck[]>("uptimeChecks")).toEqual([
+      { at: Date.UTC(2026, 9, 17, 1, 0, 0), status: 200 },
+      { at: Date.UTC(2026, 9, 17, 1, 0, 30), status: 541 },
+    ]);
   });
 
   it("取得DOの識別子を直近ログに残す", async () => {
@@ -201,6 +205,33 @@ describe("在庫の取得", () => {
     expect((await cycle()).nextDelayMs).toBe(120_000);
     apple.failing.set("R718", 541);
     expect((await cycle()).nextDelayMs).toBe(10_000);
+  });
+});
+
+describe("稼働率", () => {
+  const hour = 60 * 60_000;
+  const now = Date.UTC(2026, 9, 17, 2, 0, 0);
+
+  it("直近の応答が200だった区間だけを分子に含める", () => {
+    const uptime = calculateUptimePercent([
+      { at: now - hour, status: 200 },
+      { at: now - 45 * 60_000, status: 541 },
+      { at: now - 15 * 60_000, status: 200 },
+    ], now);
+    expect(uptime).toBe(50);
+  });
+
+  it("1時間の途中から応答が始まった場合、応答前は稼働時間に数えない", () => {
+    const uptime = calculateUptimePercent([{ at: now - 20 * 60_000, status: 200 }], now);
+    expect(uptime).toBe(33.3);
+  });
+
+  it("ウィンドウの外の直近応答から状態を引き継ぐ", () => {
+    const uptime = calculateUptimePercent([
+      { at: now - hour - 10_000, status: 200 },
+      { at: now - 30 * 60_000, status: 503 },
+    ], now);
+    expect(uptime).toBe(50);
   });
 });
 
