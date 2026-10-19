@@ -123,6 +123,17 @@ describe("通知の判定", () => {
     await cycle();
     expect(mailer.sent).toHaveLength(1);
   });
+
+  it("メール通知を無効にしても監視とSlack通知は続ける", async () => {
+    const { apple, mailer, slack, storage, deps, cycle } = setup();
+    deps.config.emailNotificationsEnabled = false;
+    apple.available.add("R005");
+
+    expect((await cycle()).ok).toBe(true);
+    expect(mailer.sent).toHaveLength(0);
+    expect(slack.sent).toHaveLength(1);
+    expect(await storage.get<unknown[]>("outbox")).toBeUndefined();
+  });
 });
 
 describe("在庫の取得", () => {

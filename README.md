@@ -73,6 +73,7 @@ npm install
 colors: ["starwhite"],        // "starwhite" / "nightsky"
 capacities: ["256gb"],        // "256gb" / "512gb" / "1tb" / "2tb"
 mailTo: ["you@example.com"],  // Resend に登録したアドレス（独自ドメイン未認証の場合）
+emailNotificationsEnabled: true, // false にすると監視を続けたままメールだけ止める
 stores: "all",                // 全国 11 店舗。絞るなら ["R718", "R079"] のように
 intervalSeconds: 10,          // 確認間隔（秒）
 ```

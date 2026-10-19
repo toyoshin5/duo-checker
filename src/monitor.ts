@@ -242,7 +242,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   if (restocked.length) {
     log(`★ 在庫復活を検知: ${[...new Set(restocked.map((r) => `Apple ${r.storeName}`))].join("、")}`);
     const message = restockEmail(restocked, variants, checkedAt, deps.test);
-    outbox.push(newOutboxItem(message, "restock", checkedAt));
+    if (config.emailNotificationsEnabled) outbox.push(newOutboxItem(message, "restock", checkedAt));
     if (deps.slack && !deps.test) {
       try {
         await deps.slack.send(message);
@@ -266,7 +266,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   health.consecutiveBlocks ??= 0;
   const healthBefore = JSON.stringify(health);
   if (ok) {
-    if (health.alerted) {
+    if (health.alerted && config.emailNotificationsEnabled) {
       outbox.push(
         newOutboxItem(
           alertEmail(
@@ -286,7 +286,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     health.consecutiveBlocks = blocked ? health.consecutiveBlocks + 1 : 0;
     health.lastError = errors.join("; ") || `応答に含まれない店舗があります: ${missing.join(", ")}`;
     health.failingSince ??= checkedAt;
-    if (!health.alerted && checkedAt - health.failingSince >= config.errorAlertMinutes * 60_000) {
+    if (config.emailNotificationsEnabled && !health.alerted && checkedAt - health.failingSince >= config.errorAlertMinutes * 60_000) {
       outbox.push(
         newOutboxItem(
           alertEmail(
@@ -310,7 +310,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   if (JSON.stringify(health) !== healthBefore) await storage.put("health", health);
 
   // --- メール送信（失敗分は outbox に残して次のサイクルで再送）-----------------------------------
-  const sent = await flushOutbox(deps, outbox, checkedAt);
+  const sent = config.emailNotificationsEnabled ? await flushOutbox(deps, outbox, checkedAt) : 0;
 
   // --- ログ -----------------------------------------------------------------------------
   const summary = formatSummary(config.stores, parts, observed, ok);

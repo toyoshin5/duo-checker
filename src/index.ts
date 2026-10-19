@@ -333,6 +333,7 @@ export class Monitor extends DurableObject<Env> {
       configError: error,
       target: config?.variants.map((v) => v.displayName),
       stores: config?.stores.length,
+      emailNotificationsEnabled: config?.emailNotificationsEnabled,
       mailTo: config?.mailTo.map(maskAddress),
       resendApiKey: this.env.RESEND_API_KEY ? "設定済み" : "未設定（npx wrangler secret put RESEND_API_KEY）",
       slackWebhook: this.env.SLACK_WEBHOOK_URL ? "設定済み" : "未設定（npx wrangler secret put SLACK_WEBHOOK_URL）",

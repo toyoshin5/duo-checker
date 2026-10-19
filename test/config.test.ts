@@ -8,7 +8,7 @@ describe("config.ts の検証", () => {
     const config = resolveConfig(base);
     expect(config.variants.map((v) => v.partNumber)).toEqual(["MK244J/A"]);
     expect(config.stores).toHaveLength(11);
-    expect(config).toMatchObject({ intervalSeconds: 30, errorAlertMinutes: 10, enabled: true, mailFrom: DEFAULT_MAIL_FROM });
+    expect(config).toMatchObject({ intervalSeconds: 30, errorAlertMinutes: 10, enabled: true, emailNotificationsEnabled: true, mailFrom: DEFAULT_MAIL_FROM });
   });
 
   it("色と容量の組み合わせをすべて監視する", () => {

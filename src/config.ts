@@ -5,6 +5,8 @@ import { CAPACITIES, COLORS, STORES, makeVariant, type Capacity, type Color, typ
 export interface UserConfig {
   /** 監視を動かすか。false にすると確認もメール送信も止まる */
   enabled?: boolean;
+  /** メール通知を送るか。false にしても監視は続ける */
+  emailNotificationsEnabled?: boolean;
   /** 監視するカラー（複数可） */
   colors: Color[];
   /** 監視する容量（複数可） */
@@ -23,6 +25,7 @@ export interface UserConfig {
 
 export interface Config {
   enabled: boolean;
+  emailNotificationsEnabled: boolean;
   variants: Variant[];
   stores: StoreNumber[];
   mailTo: string[];
@@ -71,6 +74,7 @@ export function resolveConfig(raw: UserConfig): Config {
   if (errors.length) throw new ConfigError(`config.ts の設定に問題があります:\n- ${errors.join("\n- ")}`);
   return {
     enabled: raw.enabled ?? true,
+    emailNotificationsEnabled: raw.emailNotificationsEnabled ?? true,
     variants: colors.flatMap((c) => capacities.map((cap) => makeVariant(c, cap))),
     stores,
     mailTo,
