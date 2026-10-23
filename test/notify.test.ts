@@ -62,6 +62,26 @@ describe("Resend での送信", () => {
     expect(message.text).toBe(`iPhone Duo 256GB スターホワイト（SIMフリー）\n購入ページ: ${variant.productUrl}`);
   });
 
+  it("2店舗以上の在庫は複数店舗用の見出しにする", () => {
+    const variant = makeVariant("starwhite", "256gb");
+    const item = (storeNumber: string, storeName: string) => ({
+      storeNumber,
+      storeName,
+      partNumber: variant.partNumber,
+      available: true,
+      pickupDisplay: "available" as const,
+      pickupQuote: "本日",
+      storeUrl: `https://www.apple.com/jp/retail/${storeNumber}`,
+    });
+    const message = restockSlackMessage(
+      [item("R718", "丸の内"), item("R079", "銀座")],
+      new Map([[variant.partNumber, variant]]),
+      Date.UTC(2026, 9, 16, 15, 30, 5),
+    );
+
+    expect(message.subject).toBe("【🔔複数店舗在庫あり】iPhone Duo 256GB スターホワイト（SIMフリー）、00:30:05確認");
+  });
+
   it("Slackでは「ラベル: URL」の行をリンク表記にする", async () => {
     let body = "";
     const notifier = new SlackNotifier("https://hooks.slack.test/services/T/B/S", async (_url, init) => {

@@ -71,11 +71,13 @@ export function restockSlackMessage(
 ): Email {
   const inStockVariants = [...new Set(items.map((item) => item.partNumber))].map((partNumber) => variants.get(partNumber)!);
   const first = inStockVariants[0];
+  const storeCount = new Set(items.map((item) => item.storeNumber)).size;
+  const subjectPrefix = storeCount >= 2 ? "【🔔複数店舗在庫あり】" : "【在庫あり】";
   const text = inStockVariants.flatMap((variant) => [variant.displayName, `購入ページ: ${variant.productUrl}`]).join("\n");
   const key = items.map((item) => `${item.storeNumber}:${item.partNumber}`).join(",");
   return {
     id: `restock-${checkedAt}-${key}`,
-    subject: `【在庫あり】${first.displayName}、${formatJst(checkedAt).slice(11)}確認`,
+    subject: `${subjectPrefix}${first.displayName}、${formatJst(checkedAt).slice(11)}確認`,
     text,
   };
 }
