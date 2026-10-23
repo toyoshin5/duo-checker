@@ -73,7 +73,11 @@ export function restockSlackMessage(
   const first = inStockVariants[0];
   const storeCount = new Set(items.map((item) => item.storeNumber)).size;
   const subjectPrefix = storeCount >= 2 ? "【🔔複数店舗在庫あり】" : "【在庫あり】";
-  const text = inStockVariants.flatMap((variant) => [variant.displayName, `購入ページ: ${variant.productUrl}`]).join("\n");
+  const storeNames = [...new Map(items.map((item) => [item.storeNumber, item.storeName])).values()];
+  const text = [
+    `店舗: ${storeNames.join("、")}`,
+    ...inStockVariants.flatMap((variant) => [variant.displayName, `購入ページ: ${variant.productUrl}`]),
+  ].join("\n");
   const key = items.map((item) => `${item.storeNumber}:${item.partNumber}`).join(",");
   return {
     id: `restock-${checkedAt}-${key}`,

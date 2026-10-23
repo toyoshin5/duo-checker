@@ -59,7 +59,7 @@ describe("Resend での送信", () => {
       Date.UTC(2026, 9, 16, 15, 30, 5),
     );
     expect(message.subject).toBe("【在庫あり】iPhone Duo 256GB スターホワイト（SIMフリー）、00:30:05確認");
-    expect(message.text).toBe(`iPhone Duo 256GB スターホワイト（SIMフリー）\n購入ページ: ${variant.productUrl}`);
+    expect(message.text).toBe(`店舗: 丸の内\niPhone Duo 256GB スターホワイト（SIMフリー）\n購入ページ: ${variant.productUrl}`);
   });
 
   it("2店舗以上の在庫は複数店舗用の見出しにする", () => {
@@ -80,6 +80,7 @@ describe("Resend での送信", () => {
     );
 
     expect(message.subject).toBe("【🔔複数店舗在庫あり】iPhone Duo 256GB スターホワイト（SIMフリー）、00:30:05確認");
+    expect(message.text).toBe(`店舗: 丸の内、銀座\niPhone Duo 256GB スターホワイト（SIMフリー）\n購入ページ: ${variant.productUrl}`);
   });
 
   it("Slackでは「ラベル: URL」の行をリンク表記にする", async () => {
