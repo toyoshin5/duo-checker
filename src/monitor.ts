@@ -4,7 +4,7 @@
 import { BlockedError, fetchPickup, InventoryError, MAX_PARTS_PER_REQUEST, type FetchFn, type StoreAvailability } from "./apple";
 import { STORES } from "./catalog";
 import type { Config } from "./config";
-import { alertEmail, formatJst, MailError, restockEmail, type Email, type Mailer, type SlackSender } from "./notify";
+import { alertEmail, formatJst, MailError, restockEmail, restockSlackMessage, type Email, type Mailer, type SlackSender } from "./notify";
 
 export interface Storage {
   get<T>(key: string): Promise<T | undefined>;
@@ -245,7 +245,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
     if (config.emailNotificationsEnabled) outbox.push(newOutboxItem(message, "restock", checkedAt));
     if (deps.slack && !deps.test) {
       try {
-        await deps.slack.send(message);
+        await deps.slack.send(restockSlackMessage(restocked, variants, checkedAt));
         log("Slackに在庫復活を通知しました");
       } catch (error) {
         // Slack障害で在庫確認・メール通知を止めない。警告や復旧はSlackへ送らない。

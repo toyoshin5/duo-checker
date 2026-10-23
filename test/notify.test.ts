@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatJst, MailError, ResendMailer, SlackError, SlackNotifier } from "../src/notify";
+import { formatJst, MailError, ResendMailer, restockSlackMessage, SlackError, SlackNotifier } from "../src/notify";
+import { makeVariant } from "../src/catalog";
 
 describe("Resend での送信", () => {
   it("API キー・冪等キー・宛先を付けて送る", async () => {
@@ -40,6 +41,25 @@ describe("Resend での送信", () => {
     expect(requests[0].url).toBe("https://hooks.slack.test/services/T/B/S");
     expect(new Headers(requests[0].init.headers).get("content-type")).toBe("application/json");
     expect(JSON.parse(requests[0].init.body as string)).toEqual({ text: "*【在庫あり】iPhone Duo*\n\n丸の内 R718" });
+  });
+
+  it("Slackの在庫通知は機種・確認時刻・購入ページだけに短縮する", () => {
+    const variant = makeVariant("starwhite", "256gb");
+    const message = restockSlackMessage(
+      [{
+        storeNumber: "R718",
+        storeName: "丸の内",
+        partNumber: variant.partNumber,
+        available: true,
+        pickupDisplay: "available",
+        pickupQuote: "本日",
+        storeUrl: "https://www.apple.com/jp/retail/marunouchi",
+      }],
+      new Map([[variant.partNumber, variant]]),
+      Date.UTC(2026, 9, 16, 15, 30, 5),
+    );
+    expect(message.subject).toBe("【在庫あり】iPhone Duo 256GB スターホワイト（SIMフリー）、00:30:05確認");
+    expect(message.text).toBe(`iPhone Duo 256GB スターホワイト（SIMフリー）\n購入ページ: ${variant.productUrl}`);
   });
 
   it("Slackでは「ラベル: URL」の行をリンク表記にする", async () => {

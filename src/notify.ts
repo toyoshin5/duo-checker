@@ -1,4 +1,4 @@
-// 通知メールの文面と、Resend API での送信。
+// 通知メール・Slackの文面と、各サービスへの送信。
 
 import { fetchText, type FetchFn, type StoreAvailability } from "./apple";
 import { BAG_URL, MODEL_NAME, type Variant } from "./catalog";
@@ -62,6 +62,22 @@ export function restockEmail(
   lines.push("", `バッグ: ${BAG_URL}`);
   const key = items.map((i) => `${i.storeNumber}:${i.partNumber}`).join(",");
   return { id: `restock-${checkedAt}-${key}${test ? "-test" : ""}`, subject, text: lines.join("\n") };
+}
+
+export function restockSlackMessage(
+  items: StoreAvailability[],
+  variants: Map<string, Variant>,
+  checkedAt: number,
+): Email {
+  const inStockVariants = [...new Set(items.map((item) => item.partNumber))].map((partNumber) => variants.get(partNumber)!);
+  const first = inStockVariants[0];
+  const text = inStockVariants.flatMap((variant) => [variant.displayName, `購入ページ: ${variant.productUrl}`]).join("\n");
+  const key = items.map((item) => `${item.storeNumber}:${item.partNumber}`).join(",");
+  return {
+    id: `restock-${checkedAt}-${key}`,
+    subject: `【在庫あり】${first.displayName}、${formatJst(checkedAt).slice(11)}確認`,
+    text,
+  };
 }
 
 export function alertEmail(id: string, subject: string, body: string): Email {
