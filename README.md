@@ -1,6 +1,6 @@
 # duo-checker
 
-Apple Store（日本）の **iPhone Duo（SIM フリー）の店頭受け取り在庫** を Cloudflare Workers で 10 秒ごとに確認し、在庫が復活したらメールと Slack で知らせます。購入やバッグへの追加はしません。
+Apple Store（日本）の **iPhone Duo（SIM フリー）の店頭受け取り在庫** を Cloudflare Workers で確認し、在庫が復活したらメールと Slack で知らせます。現在は試験的に5秒間隔で確認しています。購入やバッグへの追加はしません。
 
 ## 仕組み
 
@@ -8,7 +8,7 @@ Apple Store（日本）の **iPhone Duo（SIM フリー）の店頭受け取り�
 flowchart LR
     cron["Cron（毎分）<br/>見張り役"] --> monitor
     subgraph cf["Cloudflare Workers"]
-        monitor["Monitor<br/>Durable Object<br/>10 秒ごとに確認"]
+        monitor["Monitor<br/>Durable Object<br/>5 秒ごとに確認"]
         inv["取得用<br/>Durable Object<br/>32 個のうち<br/>1 つを使う"]
         monitor -- "照会を依頼" --> inv
     end
@@ -18,7 +18,7 @@ flowchart LR
     browser["ブラウザ"] -- "状況ページ" --> monitor
 ```
 
-Monitor が 10 秒ごとに在庫を確認し、在庫なしから在庫ありに変わった店舗だけを通知します。Apple への照会は、32 個ある取得用 Durable Object のうち 1 つが行います。
+Monitor が5秒ごとに在庫を確認し、在庫なしから在庫ありに変わった店舗だけを通知します。Apple への照会は、32 個ある取得用 Durable Object のうち 1 つが行います。
 
 ## HTTP 541 への対処
 
@@ -30,7 +30,7 @@ Apple の在庫 API は、ときどき標準にないステータス **541** を
 flowchart TD
     start(["アラーム"]) --> ask["今の取得用<br/>Durable Object<br/>で在庫 API を呼ぶ"]
     ask -- "200" --> ok["在庫の変化を<br/>判定して通知"]
-    ok --> normal["10 秒後に同じ<br/>Durable Object<br/>で確認"]
+    ok --> normal["5 秒後に同じ<br/>Durable Object<br/>で確認"]
     ask -- "541" --> lap{"32 個すべてが<br/>続けて 541？"}
     lap -- "いいえ" --> fast["10 秒後に次の<br/>Durable Object<br/>で確認"]
     lap -- "はい" --> wait["30 秒〜最大 10 分<br/>待ってから次の<br/>Durable Object<br/>で確認"]
@@ -51,7 +51,7 @@ sequenceDiagram
     D6->>A: GET pickup-message
     A-->>D6: 200
     D6-->>M: 在庫情報
-    Note over M: 以後 10 秒ごとに do-6 を使い続ける
+    Note over M: 以後 5 秒ごとに do-6 を使い続ける
 ```
 
 - 541 が続いても、Apple への確認は 10 秒に 1 回までです。User-Agent や Cookie の偽装はしません。
@@ -75,7 +75,7 @@ capacities: ["256gb"],        // "256gb" / "512gb" / "1tb" / "2tb"
 mailTo: ["you@example.com"],  // Resend に登録したアドレス（独自ドメイン未認証の場合）
 emailNotificationsEnabled: true, // false にすると監視を続けたままメールだけ止める
 stores: "all",                // 全国 11 店舗。絞るなら ["R718", "R079"] のように
-intervalSeconds: 10,          // 確認間隔（秒）
+intervalSeconds: 5,           // 確認間隔（秒、現在は試験的に5秒）
 ```
 
 | 地域 | 店舗番号 |
