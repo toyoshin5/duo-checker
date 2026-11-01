@@ -1,6 +1,6 @@
 # duo-checker
 
-Apple Store（日本）の **iPhone Duo（SIM フリー）の店頭受け取り在庫** を Cloudflare Workers で確認し、在庫が復活したらメールと Slack で知らせます。現在は試験的に5秒間隔で確認しています。購入やバッグへの追加はしません。
+Apple Store（日本）の **iPhone Duo（SIM フリー）の店頭受け取り在庫** を Cloudflare Workers で確認し、在庫が復活したらメールと Slack で知らせます。5秒間隔で確認しています。
 
 ## 仕組み
 
